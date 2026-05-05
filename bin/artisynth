@@ -122,7 +122,20 @@ elif [[ "$OSNAME" == *"Linux"* || "$OSNAME" == *"Darwin"* ]] ; then
       if ! uname -m | grep -q 64 ; then
          MEM_LIMIT="-Xmx2G"
       fi
-   else 
+      # On WSL2, Mesa's libGLX_mesa.so crashes with SIGSEGV inside
+      # glXQueryDrawable when JOGL probes for swap-interval support.
+      # Preload a shim that replaces glXQueryDrawable with a safe no-op.
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+         WSL_FIX="$AT/lib/Linux64/libwsl2_glx_fix.so"
+         WSL_SRC="$AT/support/linux/wsl2_glx_fix.c"
+         if [ ! -f "$WSL_FIX" ] && [ -f "$WSL_SRC" ] && command -v gcc >/dev/null 2>&1; then
+            gcc -shared -fPIC -O2 -o "$WSL_FIX" "$WSL_SRC" -ldl 2>/dev/null
+         fi
+         if [ -f "$WSL_FIX" ]; then
+            export LD_PRELOAD="$WSL_FIX${LD_PRELOAD:+:$LD_PRELOAD}"
+         fi
+      fi
+   else
       # Mac system
       export DYLD_LIBRARY_PATH=$AT/lib/MacOS64
    fi
