@@ -30,6 +30,40 @@ List of publications in which ArtiSynth was used: [www.artisynth.org/Main/Public
 
 --------------------------------------------------------------------
 
+### Running on WSL2 (Windows Subsystem for Linux)
+
+ArtiSynth can run with a full GUI inside WSL2 using WSLg, which is
+included in Windows 11 and Windows 10 builds 22000+.
+
+**Prerequisites**
+
+- WSLg enabled (check: `echo $DISPLAY` should print `:0` or similar)
+- Java 17+ installed in WSL2 (e.g. `sudo apt install openjdk-17-jdk`)
+- `gcc` installed for the one-time shim build (`sudo apt install gcc`)
+
+**Steps**
+
+```bash
+# 1. From the artisynth_core directory, set up the environment:
+source setup.bash
+
+# 2. Launch ArtiSynth:
+artisynth
+```
+
+`bin/artisynth` automatically detects WSL2 and applies a workaround for
+a Mesa GLX crash (`SIGSEGV` in `glXQueryDrawable`) that otherwise
+prevents JOGL from initialising.  On first run it compiles a small
+native shim (`support/linux/wsl2_glx_fix.c`) into
+`lib/Linux64/libwsl2_glx_fix.so` and loads it via `LD_PRELOAD`.
+Subsequent runs reuse the compiled shim.
+
+Rendering uses Mesa's software renderer (llvmpipe, OpenGL 4.5), so no
+GPU pass-through is required.  Performance is adequate for interactive
+use; complex FEM models may run slower than on a native Linux desktop.
+
+--------------------------------------------------------------------
+
 ### Files in the top directory:
 
 <dl>
