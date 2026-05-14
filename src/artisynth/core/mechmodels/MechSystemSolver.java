@@ -39,6 +39,7 @@ import maspack.solvers.DirectSolver;
 import maspack.solvers.IterativeSolver;
 import maspack.solvers.IterativeSolver.ToleranceType;
 import maspack.solvers.KKTSolver;
+import maspack.solvers.CuDssSolver;
 import maspack.solvers.DirectSolver;
 import maspack.solvers.PardisoSolver;
 import maspack.solvers.UmfpackSolver;
@@ -346,6 +347,12 @@ public class MechSystemSolver {
 
    PardisoSolver myPardisoSolver;
    UmfpackSolver myUmfpackSolver;
+   CuDssSolver myCuDssSolver;
+
+   // True once we've warned the user that a constrained/KKT path is
+   // falling back to Pardiso while the regular direct solver is CuDss.
+   // We warn only once per solver instance to avoid log spam.
+   private boolean myWarnedCuDssKktFallback = false;
    KKTSolver myKKTSolver;
    KKTSolver myConSolver;
    KKTSolver myStaticSolver;
@@ -604,8 +611,19 @@ public class MechSystemSolver {
    public void setMatrixSolver (SparseSolverId solver) {
       if (solver != myMatrixSolver) {
          switch (solver) {
-            case Pardiso: 
+            case Pardiso:
             case Umfpack: {
+               break;
+            }
+            case CuDss: {
+               // Refuse the selection if the native lib isn't loadable;
+               // falling back silently to Pardiso would be confusing.
+               if (!CuDssSolver.isAvailable()) {
+                  System.out.println (
+                     "Matrix solver CuDss requested but cuDSS native "+
+                     "library is unavailable; staying on "+myMatrixSolver);
+                  return;
+               }
                break;
             }
             default: {
@@ -616,6 +634,7 @@ public class MechSystemSolver {
          mySolveMatrix = null;
          //myKKTSolveMatrix = null;
          myMatrixSolver = solver;
+         myWarnedCuDssKktFallback = false;
          disposeSolvers(); // remove existing solvers
       }
    }
@@ -650,6 +669,14 @@ public class MechSystemSolver {
             myUseDirectSolver = true;
             break;
          }
+         case CuDss: {
+            if (myCuDssSolver == null) {
+               myCuDssSolver = new CuDssSolver();
+            }
+            myDirectSolver = myCuDssSolver;
+            myUseDirectSolver = true;
+            break;
+         }
          case ConjugateGradient: {
             if (!(myIterativeSolver instanceof CGSolver)) {
                setIterativeSolver (new CGSolver());
@@ -665,6 +692,24 @@ public class MechSystemSolver {
    }
 
    public SparseSolverId getMatrixSolver() {
+      return myMatrixSolver;
+   }
+
+   // KKT/Murty paths require iterative refinement and other features that
+   // the cuDSS backend does not yet support. When the regular direct
+   // solver is CuDss, every constrained solve falls back to Pardiso so
+   // contact/friction/implicit-friction systems keep working.
+   private SparseSolverId kktSolverChoice() {
+      if (myMatrixSolver == SparseSolverId.CuDss) {
+         if (!myWarnedCuDssKktFallback) {
+            System.out.println (
+               "MechSystemSolver: KKT/constrained path requested while "+
+               "matrix solver is CuDss; falling back to Pardiso for "+
+               "constrained solves (regular direct solves still use cuDSS).");
+            myWarnedCuDssKktFallback = true;
+         }
+         return SparseSolverId.Pardiso;
+      }
       return myMatrixSolver;
    }
 
@@ -1647,7 +1692,7 @@ public class MechSystemSolver {
       }
       else {
          if (myKKTSolver == null) {
-            myKKTSolver = new KKTSolver(myMatrixSolver);
+            myKKTSolver = new KKTSolver(kktSolverChoice());
          }
       }
       
@@ -1984,7 +2029,7 @@ public class MechSystemSolver {
       }
       
       if (myStaticSolver == null) {
-         myStaticSolver = new KKTSolver(myMatrixSolver);
+         myStaticSolver = new KKTSolver(kktSolverChoice());
       }
 
       updateConstraintMatrices (0, false);
@@ -2604,7 +2649,7 @@ public class MechSystemSolver {
          return;
       }            
       if (myConSolver == null) {
-         myConSolver = new KKTSolver(myMatrixSolver);
+         myConSolver = new KKTSolver(kktSolverChoice());
       }
       updateConstraintMatrices (h, false);
       if (myGsize == 0 && myNsize == 0) {
@@ -2690,7 +2735,7 @@ public class MechSystemSolver {
          return;
       }            
       if (myConSolver == null) {
-         myConSolver = new KKTSolver(myMatrixSolver);
+         myConSolver = new KKTSolver(kktSolverChoice());
       }
       updateConstraintMatrices (h, false);
 
@@ -2795,7 +2840,7 @@ public class MechSystemSolver {
          return false;
       }            
 //      if (myConSolver == null) {
-//         myConSolver = new KKTSolver(myMatrixSolver);
+//         myConSolver = new KKTSolver(kktSolverChoice());
 //      }
       updateConstraintMatrices (0, false);
       myVel.setSize (velSize);
@@ -2944,7 +2989,7 @@ public class MechSystemSolver {
       mySys.addPosJacobian (S, null, -1);
       addActiveMassMatrix (mySys, S);
       if (myKKTSolver == null) {
-         myKKTSolver = new KKTSolver(myMatrixSolver);
+         myKKTSolver = new KKTSolver(kktSolverChoice());
          analyze = true;
       }
       if (myKKTGTVersion != getGTVersion()) {
@@ -3016,7 +3061,7 @@ public class MechSystemSolver {
          return false;
       }            
       if (myConSolver == null) {
-         myConSolver = new KKTSolver(myMatrixSolver);
+         myConSolver = new KKTSolver(kktSolverChoice());
       }
       updateConstraintMatrices (0, false);
 
@@ -4134,6 +4179,10 @@ public class MechSystemSolver {
       if (myUmfpackSolver != null) {
          myUmfpackSolver.dispose();
          myUmfpackSolver = null;
+      }
+      if (myCuDssSolver != null) {
+         myCuDssSolver.dispose();
+         myCuDssSolver = null;
       }
       if (myRBSolver != null) {
          myRBSolver.dispose();

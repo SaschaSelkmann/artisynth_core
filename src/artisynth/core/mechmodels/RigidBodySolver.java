@@ -91,6 +91,11 @@ public class RigidBodySolver {
       else {
          myMatrixSolver = MechSystemBase.getDefaultMatrixSolver();
       }
+      // RigidBodySolver only ever does KKT/constrained solves, which the
+      // cuDSS backend doesn't yet support. Fall back to Pardiso.
+      if (myMatrixSolver == SparseSolverId.CuDss) {
+         myMatrixSolver = SparseSolverId.Pardiso;
+      }
       mySys = sys;
    }
 

@@ -17,6 +17,13 @@ public enum SparseSolverId {
    Umfpack (true, Matrix.INDEFINITE),
 
    /**
+    * NVIDIA cuDSS sparse direct solver (GPU). Optional and experimental.
+    * Intended for regular FEM-heavy direct solves on CUDA-capable
+    * hardware. Constrained / KKT / contact paths fall back to Pardiso.
+    */
+   CuDss (true, Matrix.INDEFINITE),
+
+   /**
     * Conjugate gradient
     */
    ConjugateGradient (false, Matrix.SPD);
@@ -80,6 +87,9 @@ public enum SparseSolverId {
          }
          case Umfpack: {
             return new UmfpackSolver();
+         }
+         case CuDss: {
+            return new CuDssSolver();
          }
          default: {
             return null;

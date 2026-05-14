@@ -1660,7 +1660,8 @@ public abstract class MechSystemBase extends RenderableModelBase
       return new EnumRange<SparseSolverId>(
          SparseSolverId.class, new SparseSolverId[] {
             SparseSolverId.Pardiso,
-            SparseSolverId.Umfpack });
+            SparseSolverId.Umfpack,
+            SparseSolverId.CuDss });
    }
 
    public void setIntegrator (Integrator integrator) {
