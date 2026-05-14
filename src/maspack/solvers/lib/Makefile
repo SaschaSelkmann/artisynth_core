@@ -255,11 +255,13 @@ CUDSS_LDS      = -L$(CUDSS_LIB) -lcudss \
                  -Wl,-rpath,$(CUDSS_LIB) \
                  -Wl,-rpath,$(CUDA_HOME)/lib64
 
-# If you change CuDssSolver.java native methods, regenerate the header from
-# the project root with:
-#   javac -h src/maspack/solvers/lib -d /tmp -cp classes \
-#       src/maspack/solvers/CuDssSolver.java
-# (javah was removed in JDK 10, so we don't try to invoke it here.)
+# Regenerate the JNI header from CuDssSolver.java whenever the .java file
+# is newer than the .h. Uses `javac -h` since javah was removed in JDK 10.
+# Requires JAVA_HOME and the project's classes/ directory (so the class
+# being processed can be type-checked against its dependencies).
+maspack_solvers_CuDssSolver.h: ../CuDssSolver.java
+	$(JAVA_HOME)/bin/javac -h . -d /tmp \
+	   -cp ../../../../classes ../CuDssSolver.java
 
 cudssBridge.o: cudssBridge.cc cudssBridge.h
 	$(CC_COMP) $(CUDSS_CC_FLAGS) $(CUDSS_INCS) -c -o cudssBridge.o cudssBridge.cc

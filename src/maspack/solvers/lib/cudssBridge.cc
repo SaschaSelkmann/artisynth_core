@@ -33,6 +33,13 @@ CuDssBridge::CuDssBridge()
      myValsD(nullptr),
      myBVecD(nullptr),
      myXVecD(nullptr),
+     myBMatD(nullptr),
+     myXMatD(nullptr),
+     myMultiNrhs(0),
+     myMatBMulti(nullptr),
+     myMatXMulti(nullptr),
+     myMatBMultiDesc(false),
+     myMatXMultiDesc(false),
      myLastErr(nullptr)
 {}
 
@@ -107,12 +114,32 @@ void CuDssBridge::destroyMatrixDescriptors() {
    if (myMatBDesc) { cudssMatrixDestroy (myMatB); myMatBDesc = false; myMatB = nullptr; }
 }
 
+void CuDssBridge::destroyMultiDescriptors() {
+   if (myMatXMultiDesc) {
+      cudssMatrixDestroy (myMatXMulti);
+      myMatXMultiDesc = false;
+      myMatXMulti = nullptr;
+   }
+   if (myMatBMultiDesc) {
+      cudssMatrixDestroy (myMatBMulti);
+      myMatBMultiDesc = false;
+      myMatBMulti = nullptr;
+   }
+}
+
 void CuDssBridge::freeDeviceBuffers() {
    if (myRowOffsD) { cudaFree (myRowOffsD); myRowOffsD = nullptr; }
    if (myColIdxsD) { cudaFree (myColIdxsD); myColIdxsD = nullptr; }
    if (myValsD)    { cudaFree (myValsD);    myValsD    = nullptr; }
    if (myBVecD)    { cudaFree (myBVecD);    myBVecD    = nullptr; }
    if (myXVecD)    { cudaFree (myXVecD);    myXVecD    = nullptr; }
+}
+
+void CuDssBridge::freeMultiBuffers() {
+   destroyMultiDescriptors();
+   if (myBMatD) { cudaFree (myBMatD); myBMatD = nullptr; }
+   if (myXMatD) { cudaFree (myXMatD); myXMatD = nullptr; }
+   myMultiNrhs = 0;
 }
 
 int CuDssBridge::setPattern (int n, int nnz,
@@ -135,9 +162,11 @@ int CuDssBridge::setPattern (int n, int nnz,
 
    // Discard any prior pattern/factorization state. cuDSS doesn't support
    // changing the pattern of an existing cudssMatrix_t in-place; destroy and
-   // rebuild.
+   // rebuild. Multi-RHS scratch is tied to n; drop it too since the new
+   // pattern may have a different n.
    destroyMatrixDescriptors();
    freeDeviceBuffers();
+   freeMultiBuffers();
    myHasPattern = false;
    myAnalyzed   = false;
    myFactored   = false;
@@ -289,9 +318,81 @@ int CuDssBridge::solve (const double* b, double* x) {
    return CUDSS_BRIDGE_OK;
 }
 
+int CuDssBridge::solveMulti (int nrhs, const double* B, double* X) {
+   if (!myFactored) {
+      myLastErr = "solveMulti called before factor";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nrhs <= 0) {
+      myLastErr = "solveMulti: nrhs must be positive";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+
+   const size_t blockBytes = (size_t)myN * (size_t)nrhs * sizeof(double);
+
+   // Grow multi-RHS buffers if needed. We grow only upwards; if a caller
+   // ever asks for fewer columns later we just reuse the larger allocation
+   // and pass nrhs through to the descriptor.
+   if (nrhs > myMultiNrhs) {
+      destroyMultiDescriptors();
+      if (myBMatD) { cudaFree (myBMatD); myBMatD = nullptr; }
+      if (myXMatD) { cudaFree (myXMatD); myXMatD = nullptr; }
+      if (!cudaOk (cudaMalloc (&myBMatD, blockBytes)) ||
+          !cudaOk (cudaMalloc (&myXMatD, blockBytes))) {
+         freeMultiBuffers();
+         myLastErr = "cudaMalloc failed for multi-RHS buffers";
+         return CUDSS_BRIDGE_ERR_CUDA_ALLOC;
+      }
+      myMultiNrhs = nrhs;
+   } else {
+      // Buffers are large enough; just need to rebuild descriptors if the
+      // current nrhs differs from the descriptor's nrhs.
+      destroyMultiDescriptors();
+   }
+
+   if (!dssOk (cudssMatrixCreateDn (
+          &myMatBMulti, myN, nrhs, myN, myBMatD,
+          CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
+      myLastErr = "cudssMatrixCreateDn failed for multi-RHS B";
+      return CUDSS_BRIDGE_ERR_CUDSS_DESCRIPTOR;
+   }
+   myMatBMultiDesc = true;
+   if (!dssOk (cudssMatrixCreateDn (
+          &myMatXMulti, myN, nrhs, myN, myXMatD,
+          CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
+      myLastErr = "cudssMatrixCreateDn failed for multi-RHS X";
+      return CUDSS_BRIDGE_ERR_CUDSS_DESCRIPTOR;
+   }
+   myMatXMultiDesc = true;
+
+   if (!cudaOk (cudaMemcpyAsync (myBMatD, B, blockBytes,
+                                 cudaMemcpyHostToDevice, myStream))) {
+      myLastErr = "cudaMemcpyAsync failed copying multi-RHS B";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   if (!dssOk (cudssExecute (myHandle, CUDSS_PHASE_SOLVE,
+                             myConfig, myData,
+                             myMatA, myMatXMulti, myMatBMulti))) {
+      myLastErr = "CUDSS_PHASE_SOLVE failed (multi-RHS)";
+      return CUDSS_BRIDGE_ERR_SOLVE;
+   }
+   if (!cudaOk (cudaMemcpyAsync (X, myXMatD, blockBytes,
+                                 cudaMemcpyDeviceToHost, myStream))) {
+      myLastErr = "cudaMemcpyAsync failed copying multi-RHS X";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   if (!cudaOk (cudaStreamSynchronize (myStream))) {
+      myLastErr = "cudaStreamSynchronize failed after multi-RHS solve";
+      return CUDSS_BRIDGE_ERR_SOLVE;
+   }
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
 void CuDssBridge::dispose() {
    destroyMatrixDescriptors();
    freeDeviceBuffers();
+   freeMultiBuffers();
    if (myData)   { cudssDataDestroy (myHandle, myData); myData = nullptr; }
    if (myConfig) { cudssConfigDestroy (myConfig);       myConfig = nullptr; }
    if (myHandle) { cudssDestroy (myHandle);             myHandle = nullptr; }

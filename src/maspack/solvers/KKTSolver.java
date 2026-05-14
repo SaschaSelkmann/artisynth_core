@@ -1719,7 +1719,7 @@ public class KKTSolver {
       getCRSValues (M, sizeM, myNumVals, GT, Rg);
       if (mySolverType == SparseSolverId.Umfpack) {
          loadUmfpackValues (mySizeM + myNumG, myNumVals);
-         int status = myUmfpack.factor (myUmfpackVals);
+         int status = myUmfpack.factorValues (myUmfpackVals);
          if (status < 0) {
             throw new NumericalException ("Unable to factor matrix");
          }

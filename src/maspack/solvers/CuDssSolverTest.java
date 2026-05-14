@@ -337,6 +337,224 @@ public class CuDssSolverTest extends UnitTest {
       s.dispose();
    }
 
+   // ---- Stage B additions: array-CSR analyze, factor(double[]),
+   //      solve(double[],double[]), multi-RHS solve, symmetric mtype ----
+
+   // 5x5 SPD reference, with 0-based CSR upper-triangle as cuDSS sees it.
+   // Mirrors the C++ smoke test from Stage 1.
+   private static final int[]    SPD5_ROW_OFFS_0 = { 0, 2, 4, 5, 7, 8 };
+   private static final int[]    SPD5_COL_IDXS_0 = { 0, 2, 1, 2, 2, 3, 4, 4 };
+   private static final double[] SPD5_VALS       = { 4, 1, 3, 2, 5, 1, 1, 2 };
+   private static final double[] SPD5_RHS        = { 7, 12, 20, 9, 14 };
+   private static final double[] SPD5_EXPECTED   = { 1, 2, 3, 4, 5 };
+
+   // analyze + factor + solve via the raw-array entry points.
+   private void testArrayCsrSpdRoundtrip() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         s.analyze (SPD5_VALS, SPD5_COL_IDXS_0, SPD5_ROW_OFFS_0, 5, Matrix.SPD);
+         s.factor (SPD5_VALS);
+         double[] x = new double[5];
+         s.solve (x, SPD5_RHS);
+         for (int i = 0; i < 5; i++) {
+            if (Math.abs (x[i] - SPD5_EXPECTED[i]) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "array-CSR SPD x[" + i + "]=" + x[i] +
+                  " expected " + SPD5_EXPECTED[i]);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
+   // Refactor with same pattern via array entry points.
+   private void testArrayCsrRefactor() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         s.analyze (SPD5_VALS, SPD5_COL_IDXS_0, SPD5_ROW_OFFS_0, 5, Matrix.SPD);
+         s.factor (SPD5_VALS);
+         double[] x = new double[5];
+         s.solve (x, SPD5_RHS);
+         // Scale values 2x: x should halve.
+         double[] vals2 = SPD5_VALS.clone();
+         for (int i = 0; i < vals2.length; i++) vals2[i] *= 2.0;
+         s.factor (vals2);
+         s.solve (x, SPD5_RHS);
+         for (int i = 0; i < 5; i++) {
+            double exp = SPD5_EXPECTED[i] * 0.5;
+            if (Math.abs (x[i] - exp) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "array-CSR refactor x[" + i + "]=" + x[i] + " expected " + exp);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
+   // Multi-RHS solve: solving for k right-hand sides at once must produce
+   // the same answer as k separate single-RHS solves.
+   private void testMultiRhsConsistency() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         s.analyze (SPD5_VALS, SPD5_COL_IDXS_0, SPD5_ROW_OFFS_0, 5, Matrix.SPD);
+         s.factor (SPD5_VALS);
+
+         int n = 5;
+         int k = 4;
+         double[] B = new double[n * k];
+         for (int c = 0; c < k; c++) {
+            for (int r = 0; r < n; r++) {
+               B[c * n + r] = RandomGenerator.get().nextDouble() * 2 - 1;
+            }
+         }
+         double[] Xbatch = new double[n * k];
+         s.solve (Xbatch, B, k);
+
+         // Cross-check each column against a single-RHS solve.
+         double[] x = new double[n];
+         double[] b = new double[n];
+         for (int c = 0; c < k; c++) {
+            System.arraycopy (B, c * n, b, 0, n);
+            s.solve (x, b);
+            for (int r = 0; r < n; r++) {
+               double err = Math.abs (Xbatch[c * n + r] - x[r]);
+               if (err > RESIDUAL_TOL) {
+                  throw new TestException (
+                     "multi-RHS col " + c + " row " + r +
+                     ": multi=" + Xbatch[c*n+r] + " single=" + x[r]);
+               }
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
+   // Grow the multi-RHS buffers via increasing nrhs, then shrink. The bridge
+   // should reuse the larger allocation cleanly.
+   private void testMultiRhsGrowShrink() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         s.analyze (SPD5_VALS, SPD5_COL_IDXS_0, SPD5_ROW_OFFS_0, 5, Matrix.SPD);
+         s.factor (SPD5_VALS);
+         for (int nrhs : new int[] { 1, 3, 8, 2, 5 }) {
+            double[] B = new double[5 * nrhs];
+            double[] X = new double[5 * nrhs];
+            for (int i = 0; i < B.length; i++) {
+               B[i] = RandomGenerator.get().nextDouble() * 2 - 1;
+            }
+            s.solve (X, B, nrhs);
+            // Residual check on each column.
+            for (int c = 0; c < nrhs; c++) {
+               double[] x = new double[5];
+               double[] b = new double[5];
+               System.arraycopy (X, c * 5, x, 0, 5);
+               System.arraycopy (B, c * 5, b, 0, 5);
+               // ||A x - b|| -- assemble A on the fly using the upper-tri data.
+               double[] Ax = new double[5];
+               // upper-tri storage + symmetric mirror
+               for (int row = 0; row < 5; row++) {
+                  for (int p = SPD5_ROW_OFFS_0[row]; p < SPD5_ROW_OFFS_0[row+1]; p++) {
+                     int col = SPD5_COL_IDXS_0[p];
+                     double v = SPD5_VALS[p];
+                     Ax[row] += v * x[col];
+                     if (col != row) Ax[col] += v * x[row];
+                  }
+               }
+               double err = 0;
+               for (int i = 0; i < 5; i++) {
+                  err += (Ax[i] - b[i]) * (Ax[i] - b[i]);
+               }
+               err = Math.sqrt (err);
+               if (err > 1e-9) {
+                  throw new TestException (
+                     "multi-RHS grow/shrink nrhs=" + nrhs + " col=" + c +
+                     " residual=" + err);
+               }
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
+   // Symmetric indefinite KKT-shape matrix. Build [[M G^T];[G 0]] where M is
+   // SPD and G is rectangular -- the resulting block is symmetric indefinite,
+   // exactly what equality KKT produces. Solve with CUDSS_MTYPE_SYMMETRIC
+   // (upper-triangle storage).
+   //
+   // Concrete 5x5 KKT system, M is 3x3 SPD, G is 2x3:
+   //   M = [[4 0 1]
+   //        [0 3 2]
+   //        [1 2 5]]
+   //   G = [[1 0 1]
+   //        [0 1 1]]
+   //   K = [[M     G^T]
+   //        [G     0  ]]  (5x5, symmetric indefinite, has both positive and
+   //                       negative eigenvalues because the (G G^T) Schur
+   //                       complement makes the lower-right block effectively
+   //                       negative-definite after elimination).
+   //
+   // Stored as upper triangle, 0-based.
+   private void testSymmetricIndefiniteKkt() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         // Upper-triangle entries of K, row by row.
+         // Row 0: (0,0)=4, (0,2)=1, (0,3)=1
+         // Row 1: (1,1)=3, (1,2)=2, (1,4)=1
+         // Row 2: (2,2)=5, (2,3)=1, (2,4)=1
+         // Row 3: (3,3)=0  (the zero block diagonal). cuDSS needs the
+         //                  diagonal present; 0 is OK as long as factor
+         //                  doesn't see it as a true zero pivot. To be safe
+         //                  add a tiny regularization (-1e-12) — but for this
+         //                  test we'll use a regularized variant with -0.1.
+         // Row 4: (4,4)=-0.1
+         double[] vals = {
+            4, 1, 1,        // row 0
+            3, 2, 1,        // row 1
+            5, 1, 1,        // row 2
+            -0.1,           // row 3
+            -0.1            // row 4
+         };
+         int[]    cols = {
+            0, 2, 3,
+            1, 2, 4,
+            2, 3, 4,
+            3,
+            4
+         };
+         int[]    rows = { 0, 3, 6, 9, 10, 11 };
+
+         int n = 5;
+         double[] b = new double[] { 1, 2, 3, 4, 5 };
+         double[] x = new double[n];
+
+         s.analyze (vals, cols, rows, n, Matrix.SYMMETRIC);
+         s.factor (vals);
+         s.solve (x, b);
+
+         // Compute ||K x - b|| using full symmetric multiply.
+         double[] Kx = new double[n];
+         for (int r = 0; r < n; r++) {
+            for (int p = rows[r]; p < rows[r+1]; p++) {
+               int c = cols[p];
+               double v = vals[p];
+               Kx[r] += v * x[c];
+               if (c != r) Kx[c] += v * x[r];
+            }
+         }
+         double err = 0, bn = 0;
+         for (int i = 0; i < n; i++) {
+            err += (Kx[i] - b[i]) * (Kx[i] - b[i]);
+            bn  += b[i] * b[i];
+         }
+         double rel = Math.sqrt (err) / Math.max (1.0, Math.sqrt (bn));
+         if (rel > 1e-9) {
+            throw new TestException (
+               "symmetric-indefinite KKT solve relative residual = " + rel);
+         }
+      }
+      finally { s.dispose(); }
+   }
+
    @Override
    public void test() {
       if (!CuDssSolver.isAvailable()) {
@@ -356,6 +574,13 @@ public class CuDssSolverTest extends UnitTest {
       testDenseSparseCarrier();
       testLifecycleStability();
       testIdempotentDispose();
+
+      // Stage B additions
+      testArrayCsrSpdRoundtrip();
+      testArrayCsrRefactor();
+      testMultiRhsConsistency();
+      testMultiRhsGrowShrink();
+      testSymmetricIndefiniteKkt();
    }
 
    public static void main (String[] args) {

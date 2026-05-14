@@ -88,6 +88,8 @@ public class CuDssSolver implements DirectSolver {
    private static native int    doAnalyze (long handle);
    private static native int    doFactor  (long handle, double[] vals);
    private static native int    doSolve   (long handle, double[] b, double[] x);
+   private static native int    doSolveMulti (
+      long handle, int nrhs, double[] B, double[] X);
    private static native void   doDispose (long handle);
    private static native String doGetLastError (long handle);
    private static native String doGetVersion();
@@ -264,6 +266,88 @@ public class CuDssSolver implements DirectSolver {
    public void analyzeAndFactor (Matrix M) {
       analyze (M, M.rowSize(), 0);
       factor();
+   }
+
+   /**
+    * {@inheritDoc}
+    *
+    * <p>cuDSS expects <b>0-based</b> CRS indices. Callers must supply
+    * {@code colIdxs} and {@code rowOffs} in 0-based form (this is the
+    * opposite of {@link PardisoSolver#analyze(double[],int[],int[],int,int)},
+    * which expects 1-based indices). After this call, follow up with
+    * {@link #factor(double[])} to push the actual values; {@link #factor()}
+    * (no-args) is not supported because no {@link Matrix} reference is
+    * retained.
+    */
+   @Override
+   public synchronized void analyze (
+      double[] vals, int[] colIdxs, int[] rowOffs, int size, int type) {
+      check (doSetPattern (myHandle, size, rowOffs[size], rowOffs, colIdxs,
+                           mtypeFlag (type)),
+             "setPattern");
+      check (doAnalyze (myHandle), "analyze");
+      // We don't retain a Matrix object — factor() (no-args) won't work
+      // after this; factor(double[]) is the expected continuation.
+      myMatrix  = null;
+      mySize    = size;
+      myNumVals = rowOffs[size];
+      myType    = type;
+      myPart    = null;
+      myState   = ANALYZED;
+   }
+
+   /**
+    * {@inheritDoc}
+    *
+    * <p>The first call after {@link #analyze} does a full factorization;
+    * subsequent calls with the same sparsity pattern hit cuDSS's
+    * {@code CUDSS_PHASE_REFACTORIZATION} fast path.
+    */
+   @Override
+   public synchronized void factor (double[] vals) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      check (doFactor (myHandle, vals), "factor");
+      myState = FACTORED;
+   }
+
+   /**
+    * {@inheritDoc}
+    *
+    * <p>The native side reads exactly {@code mySize} doubles from {@code b}
+    * and writes exactly {@code mySize} doubles to {@code x}. Both arrays
+    * must have length at least {@code mySize}.
+    */
+   @Override
+   public synchronized void solve (double[] x, double[] b) {
+      if (myState != FACTORED) {
+         throw new ImproperStateException ("factor() not previously called");
+      }
+      check (doSolve (myHandle, b, x), "solve");
+   }
+
+   /**
+    * {@inheritDoc}
+    *
+    * <p>Both {@code X} and {@code B} are column-major dense matrices of
+    * size {@code mySize x nrhs}, stored as contiguous arrays of length
+    * {@code mySize * nrhs}. Backed by a dedicated multi-RHS scratch pair
+    * on the GPU that is grown lazily.
+    */
+   @Override
+   public synchronized void solve (double[] X, double[] B, int nrhs) {
+      if (myState != FACTORED) {
+         throw new ImproperStateException ("factor() not previously called");
+      }
+      if (nrhs <= 0) {
+         throw new IllegalArgumentException ("nrhs must be positive");
+      }
+      if (X.length < mySize * nrhs || B.length < mySize * nrhs) {
+         throw new IllegalArgumentException (
+            "X and B must have length >= n*nrhs (" + (mySize * nrhs) + ")");
+      }
+      check (doSolveMulti (myHandle, nrhs, B, X), "solveMulti");
    }
 
    @Override

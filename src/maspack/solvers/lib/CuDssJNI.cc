@@ -81,6 +81,24 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolve
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolveMulti
+  (JNIEnv* env, jclass /*cls*/, jlong handle, jint nrhs,
+   jdoubleArray B, jdoubleArray X) {
+   CuDssBridge* br = asBridge (handle);
+   if (!br) return CUDSS_BRIDGE_ERR_STATE;
+   jdouble* bP = env->GetDoubleArrayElements (B, nullptr);
+   jdouble* xP = env->GetDoubleArrayElements (X, nullptr);
+   if (!bP || !xP) {
+      if (bP) env->ReleaseDoubleArrayElements (B, bP, JNI_ABORT);
+      if (xP) env->ReleaseDoubleArrayElements (X, xP, JNI_ABORT);
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = br->solveMulti ((int)nrhs, (const double*)bP, (double*)xP);
+   env->ReleaseDoubleArrayElements (B, bP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (X, xP, 0);
+   return (jint)status;
+}
+
 JNIEXPORT void JNICALL Java_maspack_solvers_CuDssSolver_doDispose
   (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
    CuDssBridge* b = asBridge (handle);

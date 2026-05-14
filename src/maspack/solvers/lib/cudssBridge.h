@@ -77,6 +77,14 @@ public:
    // Copy b[] H->D, run CUDSS_PHASE_SOLVE, copy x[] D->H. Both arrays length n.
    int solve (const double* b, double* x);
 
+   // Multi-RHS solve. B and X are column-major dense matrices of size n x nrhs
+   // stored as contiguous host arrays of length n*nrhs. The bridge grows its
+   // multi-RHS device buffers lazily; the first call with nrhs > 1 allocates
+   // them, and subsequent calls with a larger nrhs grow them. Calls with
+   // nrhs == 1 are allowed (equivalent to single-RHS solve but slightly less
+   // efficient due to descriptor rebuild).
+   int solveMulti (int nrhs, const double* B, double* X);
+
    // Release all native resources. Safe to call multiple times.
    void dispose();
 
@@ -115,10 +123,23 @@ private:
    double* myBVecD;
    double* myXVecD;
 
+   // Multi-RHS scratch state. Allocated lazily on first solveMulti() call,
+   // grown if a larger nrhs is requested. Independent of the single-RHS
+   // buffers above so we don't disturb that state.
+   double*       myBMatD;
+   double*       myXMatD;
+   int           myMultiNrhs;     // current capacity in number of RHS cols
+   cudssMatrix_t myMatBMulti;
+   cudssMatrix_t myMatXMulti;
+   bool          myMatBMultiDesc;
+   bool          myMatXMultiDesc;
+
    const char* myLastErr;
 
    void destroyMatrixDescriptors();
+   void destroyMultiDescriptors();
    void freeDeviceBuffers();
+   void freeMultiBuffers();
    bool setMtype (int flag, cudssMatrixType_t& mtype, cudssMatrixViewType_t& mview);
 };
 

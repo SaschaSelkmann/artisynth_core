@@ -207,13 +207,31 @@ public class UmfpackSolver implements DirectSolver {
       return status;
    }
 
-   public int factor (double[] vals) {
+   /**
+    * Numeric factor with a status-code return. Internal use only; the
+    * {@link DirectSolver#factor(double[]) DirectSolver}-compliant entry
+    * point is {@link #factor(double[]) factor(double[])} which delegates
+    * here and throws on error.
+    */
+   public int factorValues (double[] vals) {
       freeNumeric();
       for (int i = 0; i < myVals.length; i++) {
          myVals[i] = vals[i];
       }
       return umfpack_di_numeric (
          myColOffs, myRowIdxs, myVals, symbolic, numeric, null, null);
+   }
+
+   @Override
+   public void factor (double[] vals) {
+      int status = factorValues (vals);
+      if (status < 0) {
+         throw new NumericalException (
+            "Umfpack: unable to factor matrix (status=" + status + ")");
+      }
+      else if (status == UMFPACK_WARNING_singular_matrix) {
+         System.out.println ("Umfpack: Matrix is near singular, solve could fail");
+      }
    }
 
    public void factor() {

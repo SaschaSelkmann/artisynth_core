@@ -10,6 +10,19 @@ import maspack.matrix.Matrix;
 import maspack.matrix.VectorNd;
 import maspack.matrix.NumericalException;
 
+/**
+ * Common interface for sparse direct solvers used by ArtiSynth.
+ *
+ * <p>The {@code Matrix}-based {@code analyze(Matrix,int,int)} entry point
+ * is the primary public API. The array-based {@code analyze(double[],
+ * int[], int[], int, int)} entry point, together with {@code
+ * factor(double[])} and the {@code solve(double[],double[][,int])}
+ * overloads, exist so callers like {@link KKTSolver} that already build
+ * CSR arrays internally can hand them to the solver without going through
+ * a {@code Matrix} wrapper. Not every implementation supports the array
+ * forms; the default implementations throw {@link
+ * UnsupportedOperationException}.
+ */
 public interface DirectSolver {
    /**
     * Performs prefactor analysis on a specified matrix. The matrix reference is
@@ -134,4 +147,87 @@ public interface DirectSolver {
     * Releases all internal resources allocated by this solver.
     */
    public void dispose();
+
+   // -------------------------------------------------------------------
+   // Array-CSR entry points used by KKTSolver and similar callers that
+   // build CRS arrays themselves rather than going through Matrix.
+   // -------------------------------------------------------------------
+
+   /**
+    * Performs prefactor analysis on a matrix supplied as CRS arrays. The
+    * caller is responsible for matching the implementation's expected
+    * index base; PARDISO expects 1-based indices, while cuDSS expects
+    * 0-based. Each implementation documents its convention.
+    *
+    * <p>The default implementation throws {@link
+    * UnsupportedOperationException}. Implementations that support direct
+    * CRS analyze (PARDISO, cuDSS) override this method.
+    *
+    * @param vals nonzero values, row-major
+    * @param colIdxs column indices for each value
+    * @param rowOffs row start offsets, length size+1
+    * @param size matrix size (number of rows/columns)
+    * @param type matrix type flags ({@link Matrix#INDEFINITE},
+    * {@link Matrix#SYMMETRIC}, {@link Matrix#SPD})
+    */
+   default void analyze (
+      double[] vals, int[] colIdxs, int[] rowOffs, int size, int type) {
+      throw new UnsupportedOperationException (
+         getClass().getSimpleName()
+         + " does not support analyze(double[],int[],int[],int,int)");
+   }
+
+   /**
+    * Re-factors a previously-analyzed matrix using new values, keeping
+    * the same sparsity pattern. Implementations may use a refactorization
+    * fast path when available.
+    *
+    * <p>The default implementation throws {@link
+    * UnsupportedOperationException}.
+    *
+    * @param vals new nonzero values, in the same order used by the most
+    * recent {@link #analyze(double[],int[],int[],int,int) analyze}
+    */
+   default void factor (double[] vals) {
+      throw new UnsupportedOperationException (
+         getClass().getSimpleName() + " does not support factor(double[])");
+   }
+
+   /**
+    * Solves {@code M x = b} for a previously-factored matrix, using
+    * primitive arrays. The default implementation wraps {@code x} and
+    * {@code b} as {@link VectorNd} buffers and delegates to {@link
+    * #solve(VectorNd,VectorNd)}.
+    */
+   default void solve (double[] x, double[] b) {
+      VectorNd xv = new VectorNd (x.length, x);
+      VectorNd bv = new VectorNd (b.length, b);
+      solve (xv, bv);
+      // VectorNd constructed from a double[] backing array does NOT
+      // alias; copy result back.
+      for (int i = 0; i < x.length; i++) {
+         x[i] = xv.get(i);
+      }
+   }
+
+   /**
+    * Solves {@code M X = B} for multiple right-hand sides, with {@code X}
+    * and {@code B} stored column-major (each column is one RHS). The
+    * default implementation loops over single-RHS solves; implementations
+    * with native multi-RHS support override this for performance.
+    *
+    * @param X solution columns, length {@code n * nrhs}
+    * @param B right-hand side columns, length {@code n * nrhs}
+    * @param nrhs number of right-hand sides
+    */
+   default void solve (double[] X, double[] B, int nrhs) {
+      int n = X.length / nrhs;
+      double[] x = new double[n];
+      double[] b = new double[n];
+      for (int k = 0; k < nrhs; k++) {
+         System.arraycopy (B, k * n, b, 0, n);
+         solve (x, b);
+         System.arraycopy (x, 0, X, k * n, n);
+      }
+   }
 }

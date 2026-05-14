@@ -67,6 +67,14 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolve
 
 /*
  * Class:     maspack_solvers_CuDssSolver
+ * Method:    doSolveMulti
+ * Signature: (JI[D[D)I
+ */
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolveMulti
+  (JNIEnv *, jclass, jlong, jint, jdoubleArray, jdoubleArray);
+
+/*
+ * Class:     maspack_solvers_CuDssSolver
  * Method:    doDispose
  * Signature: (J)V
  */
