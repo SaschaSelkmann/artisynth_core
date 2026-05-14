@@ -78,6 +78,23 @@ int CuDssBridge::init() {
       myLastErr = "cudssConfigCreate failed";
       return CUDSS_BRIDGE_ERR_INIT;
    }
+   // Enable cuDSS's built-in iterative refinement (2 steps by default).
+   // This applies residual-correction passes after each solve, tightening
+   // the result to PARDISO-comparable precision without the cost of a
+   // full refactor. Not load-bearing for the FE path (matrix is mild and
+   // single solve is already accurate); important for symmetric-indefinite
+   // KKT systems where the LDL pivot path is otherwise less precise than
+   // PARDISO's. Failure is non-fatal: log and continue without IR.
+   {
+      int irSteps = 4;
+      cudssStatus_t s = cudssConfigSet (
+         myConfig, CUDSS_CONFIG_IR_N_STEPS, &irSteps, sizeof(int));
+      if (!dssOk (s)) {
+         std::fprintf (stderr,
+            "[cudssBridge] cudssConfigSet(IR_N_STEPS) returned %d -- "
+            "continuing without iterative refinement\n", (int)s);
+      }
+   }
    if (!dssOk (cudssDataCreate (myHandle, &myData))) {
       cudssConfigDestroy (myConfig);
       myConfig = nullptr;

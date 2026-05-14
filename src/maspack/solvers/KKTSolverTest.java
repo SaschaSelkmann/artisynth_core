@@ -699,9 +699,12 @@ public class KKTSolverTest {
       SparseBlockMatrix GT = new SparseBlockMatrix();
       GT.addBlock (0, 0, GTblk);
 
+      // Deliberately leave Rg = 0 to exercise the indefinite-KKT path
+      // where cuDSS LDL is less accurate than PARDISO without iterative
+      // refinement. With CUDSS_CONFIG_IR_N_STEPS enabled in the bridge,
+      // residual-correction passes should bring cuDSS to PARDISO-comparable
+      // precision on this system.
       VectorNd Rg = new VectorNd (3);
-      Rg.setRandom();
-      Rg.absolute();   // regularize constraint block so KKT is non-singular
       VectorNd bm = new VectorNd (6); bm.setRandom();
       VectorNd bg = new VectorNd (3);
       VectorNd vel = new VectorNd (6);
