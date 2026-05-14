@@ -1,0 +1,317 @@
+/**
+ * Copyright (c) 2026, by the Authors: ArtiSynth Team
+ *
+ * This software is freely available under a 2-clause BSD license. Please see
+ * the LICENSE file in the ArtiSynth distribution directory for details.
+ */
+package maspack.solvers;
+
+import maspack.fileutil.NativeLibraryException;
+import maspack.fileutil.NativeLibraryManager;
+import maspack.matrix.ImproperStateException;
+import maspack.matrix.Matrix;
+import maspack.matrix.Matrix.Partition;
+import maspack.matrix.NumericalException;
+import maspack.matrix.VectorNd;
+
+/**
+ * JNI interface to NVIDIA cuDSS, exposed as a {@link DirectSolver}.
+ *
+ * <p>This is an optional, experimental backend intended for regular
+ * FEM-heavy sparse direct solves on a CUDA-capable GPU. It is not a
+ * drop-in replacement for {@link PardisoSolver}: it does not implement
+ * iterative refinement, multiple right-hand sides, or KKT-style
+ * constrained solves. Use it only for the regular
+ * {@code BackwardEuler}-style FE solve path.
+ *
+ * <p>Typical usage mirrors {@link PardisoSolver}:
+ * <pre>
+ *    CuDssSolver s = new CuDssSolver();
+ *    s.analyze (M, M.rowSize(), Matrix.SPD);
+ *    s.factor();
+ *    s.solve (x, b);
+ *    s.dispose();
+ * </pre>
+ *
+ * <p>After the first {@link #factor()} call following an analyze,
+ * subsequent calls to {@link #factor()} with the same sparsity pattern
+ * use cuDSS's refactorization phase, which is significantly cheaper than
+ * a full factorization. This maps directly onto FE time-stepping where
+ * the solve matrix structure stays fixed across steps and only the
+ * numeric values change.
+ *
+ * <p>Indices passed to cuDSS are 0-based. Maspack's public CRS export is
+ * 1-based, so this class converts a copy on every {@code analyze()}.
+ *
+ * <p>You must call {@link #dispose()} when done so that GPU resources
+ * are released.
+ */
+public class CuDssSolver implements DirectSolver {
+
+   // Matches the CUDSS_BRIDGE_MT_* constants in cudssBridge.h
+   private static final int MT_GENERAL   = 0;
+   private static final int MT_SYMMETRIC = 1;
+   private static final int MT_SPD       = 2;
+
+   // Solver state, matching PardisoSolver's convention
+   public static final int UNSET    = 0;
+   public static final int ANALYZED = 1;
+   public static final int FACTORED = 2;
+
+   // Initialization status
+   private static final int INIT_UNKNOWN              =  0;
+   private static final int INIT_OK                   =  1;
+   private static final int ERR_CANT_LOAD_LIBRARIES   = -1;
+
+   // Native library name. NativeLibraryManager resolves this to
+   // lib/Linux64/libCuDssJNI.so.0.7.1 (mirroring PardisoJNI's pattern).
+   static String nativeLibrary = "CuDssJNI.0.7.1";
+
+   private static int myInitStatus = INIT_UNKNOWN;
+   private static String myInitErrMsg;
+
+   private long myHandle;        // pointer to native CuDssBridge
+   private int  myState;
+   private int  mySize;
+   private int  myNumVals;
+   private int  myType;
+   private Matrix myMatrix;
+   private Partition myPart;
+   private double[] myVals;
+   private int[]    myColIdxs;   // 0-based, length numVals
+   private int[]    myRowOffs;   // 0-based, length size+1
+
+   // Native methods — see CuDssJNI.cc
+   private static native long   doInit();
+   private static native int    doSetPattern (
+      long handle, int n, int nnz, int[] rowOffs, int[] colIdxs, int mtype);
+   private static native int    doAnalyze (long handle);
+   private static native int    doFactor  (long handle, double[] vals);
+   private static native int    doSolve   (long handle, double[] b, double[] x);
+   private static native void   doDispose (long handle);
+   private static native String doGetLastError (long handle);
+   private static native String doGetVersion();
+
+   private static synchronized void doLoadLibraries() {
+      if (myInitStatus != INIT_UNKNOWN) {
+         return;
+      }
+      try {
+         NativeLibraryManager.load (nativeLibrary);
+         myInitStatus = INIT_OK;
+      }
+      catch (NativeLibraryException | UnsatisfiedLinkError e) {
+         myInitErrMsg = e.getMessage();
+         myInitStatus = ERR_CANT_LOAD_LIBRARIES;
+      }
+   }
+
+   /**
+    * Returns true if the cuDSS native library is available and loaded.
+    * If this returns false, all attempts to construct a {@code CuDssSolver}
+    * will throw {@link UnsupportedOperationException}.
+    */
+   public static boolean isAvailable() {
+      if (myInitStatus == INIT_UNKNOWN) {
+         doLoadLibraries();
+      }
+      return myInitStatus == INIT_OK;
+   }
+
+   /**
+    * Returns the cuDSS runtime version (e.g. "0.7.1"), or {@code null} if
+    * the native library is unavailable.
+    */
+   public static String getCuDssVersion() {
+      if (!isAvailable()) {
+         return null;
+      }
+      return doGetVersion();
+   }
+
+   /**
+    * Creates a new CuDssSolver. Throws {@link UnsupportedOperationException}
+    * if the native cuDSS library cannot be loaded.
+    */
+   public CuDssSolver() {
+      if (!isAvailable()) {
+         throw new UnsupportedOperationException (
+            "cuDSS not available: " + myInitErrMsg);
+      }
+      myHandle = doInit();
+      if (myHandle == 0L) {
+         throw new UnsupportedOperationException (
+            "cuDSS initialization failed (no CUDA-capable device?)");
+      }
+      myState = UNSET;
+      myVals    = new double[0];
+      myColIdxs = new int[0];
+      myRowOffs = new int[0];
+   }
+
+   private static int mtypeFlag (int type) {
+      if ((type & Matrix.SYMMETRIC) != 0) {
+         if ((type & Matrix.POSITIVE_DEFINITE) != 0) {
+            return MT_SPD;
+         }
+         return MT_SYMMETRIC;
+      }
+      return MT_GENERAL;
+   }
+
+   private static Partition partitionFor (int type) {
+      if ((type & Matrix.SYMMETRIC) != 0) {
+         return Partition.UpperTriangular;
+      }
+      return Partition.Full;
+   }
+
+   private void ensureBufferCapacity (int size, int numVals) {
+      if (myVals.length < numVals) {
+         myVals = new double[numVals];
+      }
+      if (myColIdxs.length < numVals) {
+         myColIdxs = new int[numVals];
+      }
+      if (myRowOffs.length < size + 1) {
+         myRowOffs = new int[size + 1];
+      }
+   }
+
+   // Maspack CRS export is 1-based; cuDSS needs 0-based. Convert in place.
+   private static void toZeroBased (int[] rowOffs, int sizePlus1,
+                                    int[] colIdxs, int numVals) {
+      for (int i = 0; i < sizePlus1; i++) {
+         rowOffs[i] -= 1;
+      }
+      for (int i = 0; i < numVals; i++) {
+         colIdxs[i] -= 1;
+      }
+   }
+
+   private void check (int status, String op) {
+      if (status != 0) {
+         String detail = doGetLastError (myHandle);
+         throw new NumericalException (
+            "cuDSS " + op + " failed (status " + status + ")"
+            + (detail != null ? ": " + detail : ""));
+      }
+   }
+
+   @Override
+   public synchronized void analyze (Matrix M, int size, int type) {
+      if (M.rowSize() != M.colSize()) {
+         throw new IllegalArgumentException ("Matrix is not square");
+      }
+      if (size < 0 || size > M.rowSize()) {
+         throw new IllegalArgumentException (
+            "Requested size " + size + " is out of bounds");
+      }
+      Partition part = partitionFor (type);
+      int numVals = M.numNonZeroVals (Partition.Full, size, size);
+      if (part == Partition.UpperTriangular) {
+         numVals -= (numVals - size) / 2;
+      }
+      ensureBufferCapacity (size, numVals);
+      M.getCRSIndices (myColIdxs, myRowOffs, part, size, size);
+      M.getCRSValues  (myVals, part, size, size);
+      toZeroBased (myRowOffs, size + 1, myColIdxs, numVals);
+
+      // Trim to exact lengths; the native side reads up to nnz from these
+      // arrays, but it's safer to pass arrays of the exact size in case
+      // future versions add bounds checks.
+      int[] rowOffs = myRowOffs;
+      int[] colIdxs = myColIdxs;
+      if (myRowOffs.length != size + 1) {
+         rowOffs = new int[size + 1];
+         System.arraycopy (myRowOffs, 0, rowOffs, 0, size + 1);
+      }
+      if (myColIdxs.length != numVals) {
+         colIdxs = new int[numVals];
+         System.arraycopy (myColIdxs, 0, colIdxs, 0, numVals);
+      }
+
+      check (doSetPattern (myHandle, size, numVals, rowOffs, colIdxs,
+                           mtypeFlag (type)),
+             "setPattern");
+      check (doAnalyze (myHandle), "analyze");
+
+      mySize    = size;
+      myNumVals = numVals;
+      myType    = type;
+      myMatrix  = M;
+      myPart    = part;
+      myState   = ANALYZED;
+   }
+
+   @Override
+   public synchronized void factor() {
+      if (myState == UNSET || myMatrix == null) {
+         throw new ImproperStateException (
+            "analyze() or analyzeAndFactor() not previously called");
+      }
+      myMatrix.getCRSValues (myVals, myPart, mySize, mySize);
+      double[] vals = myVals;
+      if (myVals.length != myNumVals) {
+         vals = new double[myNumVals];
+         System.arraycopy (myVals, 0, vals, 0, myNumVals);
+      }
+      check (doFactor (myHandle, vals), "factor");
+      myState = FACTORED;
+   }
+
+   @Override
+   public void analyzeAndFactor (Matrix M) {
+      analyze (M, M.rowSize(), 0);
+      factor();
+   }
+
+   @Override
+   public synchronized void solve (VectorNd x, VectorNd b) {
+      if (myState != FACTORED) {
+         throw new ImproperStateException (
+            "factor() not previously called");
+      }
+      if (x.size() < mySize) {
+         x.setSize (mySize);
+      }
+      if (b.size() < mySize) {
+         throw new IllegalArgumentException (
+            "Right-hand side b has size " + b.size()
+            + ", expected at least " + mySize);
+      }
+      // VectorNd.getBuffer() may be longer than size(); the native side
+      // reads/writes exactly the first mySize entries.
+      check (doSolve (myHandle, b.getBuffer(), x.getBuffer()), "solve");
+   }
+
+   @Override
+   public void autoFactorAndSolve (VectorNd x, VectorNd b, int tolExp) {
+      factor();
+      solve (x, b);
+   }
+
+   @Override
+   public boolean hasAutoIterativeSolving() {
+      return false;
+   }
+
+   @Override
+   public synchronized void dispose() {
+      if (myHandle != 0L) {
+         doDispose (myHandle);
+         myHandle = 0L;
+      }
+      myState = UNSET;
+   }
+
+   @Override
+   protected void finalize() throws Throwable {
+      try {
+         dispose();
+      }
+      finally {
+         super.finalize();
+      }
+   }
+}

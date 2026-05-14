@@ -1,0 +1,110 @@
+// JNI dispatch for maspack.solvers.CuDssSolver. Each native method maps to a
+// thin wrapper around the matching CuDssBridge method. Bridge state is
+// passed back to Java as an opaque jlong (a CuDssBridge*).
+
+#include "maspack_solvers_CuDssSolver.h"
+#include "cudssBridge.h"
+
+#include <cstdio>
+#include <cstring>
+
+static inline CuDssBridge* asBridge (jlong handle) {
+   return reinterpret_cast<CuDssBridge*> (handle);
+}
+
+JNIEXPORT jlong JNICALL Java_maspack_solvers_CuDssSolver_doInit
+  (JNIEnv* /*env*/, jclass /*cls*/) {
+   CuDssBridge* b = new CuDssBridge();
+   if (b->init() != CUDSS_BRIDGE_OK) {
+      delete b;
+      return 0L;
+   }
+   return reinterpret_cast<jlong> (b);
+}
+
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSetPattern
+  (JNIEnv* env, jclass /*cls*/,
+   jlong handle, jint n, jint nnz,
+   jintArray rowOffs, jintArray colIdxs, jint mtype) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+
+   jint* rowOffsP = env->GetIntArrayElements (rowOffs, nullptr);
+   jint* colIdxsP = env->GetIntArrayElements (colIdxs, nullptr);
+   if (!rowOffsP || !colIdxsP) {
+      if (rowOffsP) env->ReleaseIntArrayElements (rowOffs, rowOffsP, JNI_ABORT);
+      if (colIdxsP) env->ReleaseIntArrayElements (colIdxs, colIdxsP, JNI_ABORT);
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = b->setPattern ((int)n, (int)nnz,
+                               (const int*)rowOffsP, (const int*)colIdxsP,
+                               (int)mtype);
+   // JNI_ABORT: we didn't modify the contents, no need to copy back
+   env->ReleaseIntArrayElements (rowOffs, rowOffsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (colIdxs, colIdxsP, JNI_ABORT);
+   return (jint)status;
+}
+
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAnalyze
+  (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   return (jint)b->analyze();
+}
+
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactor
+  (JNIEnv* env, jclass /*cls*/, jlong handle, jdoubleArray vals) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   jdouble* valsP = env->GetDoubleArrayElements (vals, nullptr);
+   if (!valsP) return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   int status = b->factor ((const double*)valsP);
+   env->ReleaseDoubleArrayElements (vals, valsP, JNI_ABORT);
+   return (jint)status;
+}
+
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolve
+  (JNIEnv* env, jclass /*cls*/, jlong handle, jdoubleArray b, jdoubleArray x) {
+   CuDssBridge* br = asBridge (handle);
+   if (!br) return CUDSS_BRIDGE_ERR_STATE;
+   jdouble* bP = env->GetDoubleArrayElements (b, nullptr);
+   jdouble* xP = env->GetDoubleArrayElements (x, nullptr);
+   if (!bP || !xP) {
+      if (bP) env->ReleaseDoubleArrayElements (b, bP, JNI_ABORT);
+      if (xP) env->ReleaseDoubleArrayElements (x, xP, JNI_ABORT);
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = br->solve ((const double*)bP, (double*)xP);
+   // 0: commit changes to the x array
+   env->ReleaseDoubleArrayElements (b, bP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (x, xP, 0);
+   return (jint)status;
+}
+
+JNIEXPORT void JNICALL Java_maspack_solvers_CuDssSolver_doDispose
+  (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
+   CuDssBridge* b = asBridge (handle);
+   if (b) {
+      delete b; // destructor calls dispose()
+   }
+}
+
+JNIEXPORT jstring JNICALL Java_maspack_solvers_CuDssSolver_doGetLastError
+  (JNIEnv* env, jclass /*cls*/, jlong handle) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return nullptr;
+   const char* msg = b->getLastErrorMessage();
+   if (!msg) return nullptr;
+   return env->NewStringUTF (msg);
+}
+
+JNIEXPORT jstring JNICALL Java_maspack_solvers_CuDssSolver_doGetVersion
+  (JNIEnv* env, jclass /*cls*/) {
+   int major = 0, minor = 0, patch = 0;
+   cudssGetProperty (MAJOR_VERSION, &major);
+   cudssGetProperty (MINOR_VERSION, &minor);
+   cudssGetProperty (PATCH_LEVEL,   &patch);
+   char buf[64];
+   std::snprintf (buf, sizeof(buf), "%d.%d.%d", major, minor, patch);
+   return env->NewStringUTF (buf);
+}

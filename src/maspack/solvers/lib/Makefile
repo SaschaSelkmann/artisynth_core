@@ -220,6 +220,65 @@ endif
 .PHONY: pardiso
 pardiso:	$(LIB_TARGET_DIR)/$(PARDISO_MKL_TARGET)
 
+# ------------------------------------------------------------------
+# Optional: NVIDIA cuDSS backend. Built only on explicit `make cudss`
+# request; NOT included in the default `libs` target so that machines
+# without CUDA can still build the rest of ArtiSynth.
+#
+# Environment overrides:
+#   CUDA_HOME   default /usr/local/cuda
+#   CUDSS_INC   default /usr/include/libcudss/12
+#   CUDSS_LIB   default /usr/lib/x86_64-linux-gnu/libcudss/12
+#
+# CuDssJNI version tracks the cuDSS release we link against.
+# ------------------------------------------------------------------
+CUDSS_VERSION ?= 0.7.1
+CUDA_HOME     ?= /usr/local/cuda
+CUDSS_INC     ?= /usr/include/libcudss/12
+CUDSS_LIB     ?= /usr/lib/x86_64-linux-gnu/libcudss/12
+
+ifeq ($(SYSTEM),Linux)
+   CUDSS_JNI_TARGET = libCuDssJNI.so.$(CUDSS_VERSION)
+else
+   # cuDSS is not officially supported on macOS; Windows support would need
+   # its own toolchain. Provide a dummy target name so the Makefile parses
+   # but `make cudss` will only succeed on Linux.
+   CUDSS_JNI_TARGET = libCuDssJNI.unsupported
+endif
+
+CUDSS_JNI_OBJS = CuDssJNI.o cudssBridge.o
+CUDSS_CC_FLAGS = -O2 -fPIC -std=c++17 -DLINUX
+CUDSS_INCS     = -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux \
+                 -I$(CUDSS_INC) -I$(CUDA_HOME)/include -I.
+CUDSS_LDS      = -L$(CUDSS_LIB) -lcudss \
+                 -L$(CUDA_HOME)/lib64 -lcudart \
+                 -Wl,-rpath,$(CUDSS_LIB) \
+                 -Wl,-rpath,$(CUDA_HOME)/lib64
+
+# If you change CuDssSolver.java native methods, regenerate the header from
+# the project root with:
+#   javac -h src/maspack/solvers/lib -d /tmp -cp classes \
+#       src/maspack/solvers/CuDssSolver.java
+# (javah was removed in JDK 10, so we don't try to invoke it here.)
+
+cudssBridge.o: cudssBridge.cc cudssBridge.h
+	$(CC_COMP) $(CUDSS_CC_FLAGS) $(CUDSS_INCS) -c -o cudssBridge.o cudssBridge.cc
+
+CuDssJNI.o: maspack_solvers_CuDssSolver.h CuDssJNI.cc cudssBridge.h
+	$(CC_COMP) $(CUDSS_CC_FLAGS) $(CUDSS_INCS) -c -o CuDssJNI.o CuDssJNI.cc
+
+$(LIB_TARGET_DIR)/$(CUDSS_JNI_TARGET): $(CUDSS_JNI_OBJS)
+	$(CC_COMP) $(CUDSS_CC_FLAGS) -shared -Wl,-rpath='$$ORIGIN' \
+	   -o $@ $(CUDSS_JNI_OBJS) $(CUDSS_LDS)
+
+.PHONY: cudss cudss-clean
+cudss: $(LIB_TARGET_DIR)/$(CUDSS_JNI_TARGET)
+
+cudss-clean:
+	rm -f $(CUDSS_JNI_OBJS) maspack_solvers_CuDssSolver.h \
+	      $(LIB_TARGET_DIR)/$(CUDSS_JNI_TARGET)
+
+
 pardisoTestExample: pardisoTestExample.c
 	$(C_COMP) $(CC_FLAGS) -o pardisoTestExample pardisoTestExample.c \
 	$(LDS_PARDISO_MKL)
