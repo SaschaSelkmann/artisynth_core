@@ -722,7 +722,12 @@ public class KKTSolver {
       myNumD = 0;
       myDT = null;
 
-      if (myPardiso != null && myDirectCnt > 0 &&
+      // Try the iterative-with-stale-factor fast path. PARDISO does
+      // preconditioned CGS; cuDSS does preconditioned BiCGStab via
+      // cuSPARSE. Other backends return -1 from the default
+      // DirectSolver.iterativeSolve and we fall through to a real factor.
+      if (myMatrixSolver.hasAutoIterativeSolving() &&
+          myDirectCnt > 0 &&
           (myIterativeCnt == 0 || myIterativeCnt+1 < estimateOptimalCount())) {
          long t0 = System.nanoTime();
          getCRSValues (M, sizeM, myNumVals, GT, Rg);
@@ -740,7 +745,8 @@ public class KKTSolver {
             xbuf[i + mySizeM] = bbuf[i];
          }
 
-         iterStatus = myPardiso.iterativeSolve (myVals, ybuf, xbuf, tolExp);
+         iterStatus = myMatrixSolver.iterativeSolve (
+            myVals, ybuf, xbuf, tolExp);
 
          if (iterStatus > 0) {
             bbuf = vel.getBuffer();

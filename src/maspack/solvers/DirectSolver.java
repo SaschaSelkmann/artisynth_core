@@ -230,4 +230,25 @@ public interface DirectSolver {
          System.arraycopy (x, 0, X, k * n, n);
       }
    }
+
+   /**
+    * Iterative solve using the most recent factorization as a
+    * preconditioner. Used by {@link KKTSolver} and similar callers
+    * that drive the hybrid solve themselves rather than going through
+    * {@link #autoFactorAndSolve}. PARDISO does preconditioned CGS;
+    * cuDSS does preconditioned BiCGStab via cuSPARSE.
+    *
+    * @param vals current matrix values (length nnz)
+    * @param x output solution (length n)
+    * @param b right-hand side (length n)
+    * @param tolExp exponent of relative residual tolerance (target
+    *               residual is 10^-tolExp)
+    * @return number of iterations on success (positive), or
+    *         non-positive on failure / not supported. Callers should
+    *         refactor on a non-positive return.
+    */
+   default int iterativeSolve (
+      double[] vals, double[] x, double[] b, int tolExp) {
+      return -1;
+   }
 }

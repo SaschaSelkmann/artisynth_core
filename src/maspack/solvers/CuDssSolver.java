@@ -442,10 +442,10 @@ public class CuDssSolver implements DirectSolver {
 
    @Override
    public boolean hasAutoIterativeSolving() {
-      // True only if we have a Matrix reference to re-extract values from.
-      // The array-CSR analyze path (used by KKTSolver) leaves myMatrix
-      // null, and that path uses iterativeSolve(double[]...) directly.
-      return myMatrix != null;
+      // BiCGStab is available for both analyze paths (Matrix-based and
+      // array-CSR), distinguished only by which autoFactorAndSolve /
+      // iterativeSolve entry point the caller uses.
+      return true;
    }
 
    /**
@@ -455,9 +455,10 @@ public class CuDssSolver implements DirectSolver {
     * factor as a preconditioner, and writes the solution into {@code x}.
     *
     * <p>Returns the number of BiCGStab iterations on success ({@code > 0}),
-    * or a negative status code on failure. Callers should refactor and
+    * or a non-positive value on failure. Callers should refactor and
     * fall back to a direct solve if the return value is non-positive.
     */
+   @Override
    public synchronized int iterativeSolve (
       double[] vals, double[] x, double[] b, int tolExp) {
       if (myState != FACTORED) {
