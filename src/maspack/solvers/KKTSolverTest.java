@@ -577,6 +577,166 @@ public class KKTSolverTest {
       return err;
    }
 
+   // Local epsilon-equality helper for the Stage C cuDSS tests below.
+   // KKTSolverTest doesn't extend UnitTest, so we inline a small check.
+   private static void requireClose (
+      String label, VectorNd a, VectorNd b, double tol) {
+      if (a.size() != b.size()) {
+         throw new TestException (
+            label + ": size mismatch " + a.size() + " vs " + b.size());
+      }
+      double scale = Math.max (1.0, (a.norm() + b.norm()) / 2);
+      VectorNd diff = new VectorNd (a);
+      diff.sub (b);
+      double rel = diff.norm() / scale;
+      if (rel > tol) {
+         throw new TestException (
+            label + ": relative diff " + rel + " > " + tol +
+            "\n  a = " + a.toString ("%10.6f") +
+            "\n  b = " + b.toString ("%10.6f"));
+      }
+   }
+
+   // Stage C: equality-KKT regression test for cuDSS-backed KKTSolver.
+   // Compares vel/lam against the PARDISO-backed solver on the same
+   // randomly-generated SPD M + dense GT system used in test().
+   public void testCuDssEquality() {
+      if (!CuDssSolver.isAvailable()) {
+         System.out.println (
+            "KKTSolverTest.testCuDssEquality: cuDSS not available -- skipping");
+         return;
+      }
+      RandomGenerator.setSeed (0x4567);
+
+      MatrixNdBlock Mblk = new MatrixNdBlock (6, 6);
+      MatrixNdBlock GTblk = new MatrixNdBlock (6, 3);
+      GTblk.setRandom();
+      Mblk.setRandom();
+      Mblk.mulTranspose (Mblk);            // make M SPD
+      SparseBlockMatrix M = new SparseBlockMatrix();
+      M.addBlock (0, 0, Mblk);
+      SparseBlockMatrix GT = new SparseBlockMatrix();
+      GT.addBlock (0, 0, GTblk);
+
+      VectorNd Rg = new VectorNd (3);
+      VectorNd bm = new VectorNd (6);
+      VectorNd bg = new VectorNd (3);
+      bm.setRandom();
+      Rg.setRandom();
+      Rg.absolute();
+
+      for (int typeM : new int[] { Matrix.SYMMETRIC, Matrix.INDEFINITE }) {
+         VectorNd velP = new VectorNd (6), lamP = new VectorNd (3);
+         VectorNd velC = new VectorNd (6), lamC = new VectorNd (3);
+
+         KKTSolver pardiso = new KKTSolver (SparseSolverId.Pardiso);
+         pardiso.analyze (M, 6, GT, Rg, typeM);
+         pardiso.factor (M, 6, GT, Rg);
+         Status sP = pardiso.solve (velP, lamP, bm, bg);
+         pardiso.dispose();
+         if (sP != Status.SOLVED) {
+            throw new TestException (
+               "PARDISO solve failed for typeM=" + typeM + ": " + sP);
+         }
+
+         KKTSolver cudss = new KKTSolver (SparseSolverId.CuDss);
+         cudss.analyze (M, 6, GT, Rg, typeM);
+         cudss.factor (M, 6, GT, Rg);
+         Status sC = cudss.solve (velC, lamC, bm, bg);
+         cudss.dispose();
+         if (sC != Status.SOLVED) {
+            throw new TestException (
+               "cuDSS solve failed for typeM=" + typeM + ": " + sC);
+         }
+
+         requireClose ("vel (typeM=" + typeM + ")", velC, velP, 1e-8);
+         requireClose ("lam (typeM=" + typeM + ")", lamC, lamP, 1e-8);
+      }
+
+      // Diagonal-M path: M passed as a VectorNd. The diagonal-M analyze
+      // hardcodes Matrix.SYMMETRIC inside KKTSolver, so there's no
+      // matrix-type sweep here.
+      VectorNd Mdiag = new VectorNd (6);
+      Mdiag.setRandom();
+      Mdiag.absolute();
+      {
+         VectorNd velP = new VectorNd (6), lamP = new VectorNd (3);
+         VectorNd velC = new VectorNd (6), lamC = new VectorNd (3);
+
+         KKTSolver pardiso = new KKTSolver (SparseSolverId.Pardiso);
+         pardiso.analyze (Mdiag, 6, GT, Rg);
+         pardiso.factor (Mdiag, 6, GT, Rg);
+         pardiso.solve (velP, lamP, bm, bg);
+         pardiso.dispose();
+
+         KKTSolver cudss = new KKTSolver (SparseSolverId.CuDss);
+         cudss.analyze (Mdiag, 6, GT, Rg);
+         cudss.factor (Mdiag, 6, GT, Rg);
+         cudss.solve (velC, lamC, bm, bg);
+         cudss.dispose();
+
+         requireClose ("vel diag", velC, velP, 1e-8);
+         requireClose ("lam diag", lamC, lamP, 1e-8);
+      }
+   }
+
+   // Stage C: refactor with new M values must reuse the cuDSS analysis
+   // (CUDSS_PHASE_REFACTORIZATION fast path) and still produce the right
+   // answer.
+   public void testCuDssRefactor() {
+      if (!CuDssSolver.isAvailable()) {
+         return;
+      }
+      RandomGenerator.setSeed (0xABCD);
+
+      MatrixNdBlock Mblk = new MatrixNdBlock (6, 6);
+      MatrixNdBlock GTblk = new MatrixNdBlock (6, 3);
+      GTblk.setRandom();
+      Mblk.setRandom();
+      Mblk.mulTranspose (Mblk);
+      SparseBlockMatrix M = new SparseBlockMatrix();
+      M.addBlock (0, 0, Mblk);
+      SparseBlockMatrix GT = new SparseBlockMatrix();
+      GT.addBlock (0, 0, GTblk);
+
+      VectorNd Rg = new VectorNd (3);
+      Rg.setRandom();
+      Rg.absolute();   // regularize constraint block so KKT is non-singular
+      VectorNd bm = new VectorNd (6); bm.setRandom();
+      VectorNd bg = new VectorNd (3);
+      VectorNd vel = new VectorNd (6);
+      VectorNd lam = new VectorNd (3);
+
+      KKTSolver cudss = new KKTSolver (SparseSolverId.CuDss);
+      cudss.analyze (M, 6, GT, Rg, Matrix.SYMMETRIC);
+
+      // Three factor/solve cycles with mutated M values -- second and
+      // third must take the refactorization path.
+      for (int iter = 0; iter < 3; iter++) {
+         if (iter > 0) {
+            for (int i = 0; i < 6; i++) {
+               Mblk.set (i, i, Mblk.get (i, i) + 0.01);
+            }
+         }
+         cudss.factor (M, 6, GT, Rg);
+         Status s = cudss.solve (vel, lam, bm, bg);
+         if (s != Status.SOLVED) {
+            throw new TestException (
+               "cuDSS refactor iter " + iter + " failed: " + s);
+         }
+         // Cross-check against PARDISO at this iteration's M values.
+         KKTSolver pardiso = new KKTSolver (SparseSolverId.Pardiso);
+         pardiso.analyze (M, 6, GT, Rg, Matrix.SYMMETRIC);
+         pardiso.factor (M, 6, GT, Rg);
+         VectorNd velP = new VectorNd (6), lamP = new VectorNd (3);
+         pardiso.solve (velP, lamP, bm, bg);
+         pardiso.dispose();
+         requireClose ("refactor iter " + iter + " vel", vel, velP, 1e-8);
+         requireClose ("refactor iter " + iter + " lam", lam, lamP, 1e-8);
+      }
+      cudss.dispose();
+   }
+
    public static void main (String[] args) {
       KKTSolverTest tester = new KKTSolverTest();
       PardisoSolver.printThreadInfo = false;
@@ -584,6 +744,8 @@ public class KKTSolverTest {
          //tester.test();
          //tester.testFromFile ("blockCollide3.txt");
          tester.testFromFile ("MLCPtest.txt");
+         tester.testCuDssEquality();
+         tester.testCuDssRefactor();
       }
       catch (Exception e) {
          e.printStackTrace();

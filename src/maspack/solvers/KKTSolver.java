@@ -41,6 +41,7 @@ public class KKTSolver {
    SparseBlockMatrix myGT;
    UmfpackSolver myUmfpack;
    PardisoSolver myPardiso;
+   CuDssSolver   myCuDss;
    DirectSolver myMatrixSolver;
    boolean myIndices1Based = false;
    boolean myLastSolveWasIterative = false;
@@ -112,6 +113,11 @@ public class KKTSolver {
          case Umfpack: {
             myUmfpack = new UmfpackSolver();
             myMatrixSolver = myUmfpack;
+            break;
+         }
+         case CuDss: {
+            myCuDss = new CuDssSolver();
+            myMatrixSolver = myCuDss;
             break;
          }
          default: {
@@ -201,26 +207,29 @@ public class KKTSolver {
             throw new NumericalException ("Unable to analyze matrix");
          }
       }
-      else { // add 1 to indices, since Pardiso indices are 1-based
-         // XXX
-         for (int i = 0; i < numVals; i++) {
-            myColIdxs[i]++;
+      else {
+         // PARDISO wants 1-based indices; cuDSS wants 0-based. Increment
+         // only for PARDISO. myIndices1Based is consulted by getCRSValues
+         // on subsequent factor calls so the same shift is applied to any
+         // re-extracted column-index lookups.
+         if (mySolverType == SparseSolverId.Pardiso) {
+            for (int i = 0; i < numVals; i++) {
+               myColIdxs[i]++;
+            }
+            for (int i = 0; i < sizeMG+1; i++) {
+               myRowOffs[i]++;
+            }
+            myIndices1Based = true;
          }
-         for (int i = 0; i < sizeMG+1; i++) {
-            myRowOffs[i]++;
-         }
-         myIndices1Based = true;
-         if ((myTypeM & Matrix.SYMMETRIC) != 0) {
-            // even if myTypeM is SPD, the KKT system won't be, so
-            // we need a symmetric solve regardless
-            myPardiso.analyze (
-               myVals, myColIdxs, myRowOffs, sizeMG, Matrix.SYMMETRIC);
-         }
-         else {
-            myPardiso.analyze (
-               myVals, myColIdxs, myRowOffs, sizeMG, Matrix.INDEFINITE);
-         }
-         if (myPardiso.getState() == PardisoSolver.UNSET) {
+         // Even if myTypeM is SPD, the KKT system itself is symmetric
+         // indefinite (the lower-right block contributes negative
+         // eigenvalues after constraint elimination). Choose mtype
+         // accordingly.
+         int kktType = ((myTypeM & Matrix.SYMMETRIC) != 0)
+                       ? Matrix.SYMMETRIC : Matrix.INDEFINITE;
+         myMatrixSolver.analyze (
+            myVals, myColIdxs, myRowOffs, sizeMG, kktType);
+         if (myPardiso != null && myPardiso.getState() == PardisoSolver.UNSET) {
             throw new NumericalException (
                "Pardiso: unable to analyze matrix: "+myPardiso.getErrorMessage());
          }
@@ -1617,10 +1626,11 @@ public class KKTSolver {
     */
    public void solveMG (VectorNd x, VectorNd b) {
       myMatrixSolver.solve (x, b);
-      if (computeResidualMG) {
-         double res = 
+      if (computeResidualMG && myPardiso != null) {
+         // PARDISO-only diagnostic; cuDSS has no equivalent residual helper.
+         double res =
             myPardiso.residual (
-               myRowOffs, myColIdxs, myVals, mySizeM+myNumG, 
+               myRowOffs, myColIdxs, myVals, mySizeM+myNumG,
                x.getBuffer(), b.getBuffer(),(myTypeM & Matrix.SYMMETRIC) != 0);
          System.out.println ("solveRes=" + res + " size="+(mySizeM+myNumG));
       }
@@ -1632,21 +1642,16 @@ public class KKTSolver {
    }
 
    public void solveMG (double[] Xbuf, double[] Bbuf, int nrhs) {
-      if (myPardiso != null) {
-         int w = mySizeM+myNumG;
-         // NOTE: solve arguments with multiple right hand sides are stored in
-         // column major form
-         myPardiso.solve (Xbuf, Bbuf, nrhs);
-         // negate lam.
-         for (int i=0; i<nrhs; i++) {
-            for (int j=mySizeM; j<w; j++) {
-               Xbuf[i*w+j] = -Xbuf[i*w+j];
-            }
-         }        
-      }
-      else {
-         throw new UnsupportedOperationException (
-            "solve for multiple rhs only supported for Pardiso");
+      int w = mySizeM+myNumG;
+      // PARDISO and cuDSS provide native multi-RHS. Umfpack falls through
+      // to the DirectSolver default that loops single-RHS.
+      // NOTE: arguments are column-major.
+      myMatrixSolver.solve (Xbuf, Bbuf, nrhs);
+      // Negate lam (the constraint-multiplier rows).
+      for (int i = 0; i < nrhs; i++) {
+         for (int j = mySizeM; j < w; j++) {
+            Xbuf[i*w + j] = -Xbuf[i*w + j];
+         }
       }
    }
 
@@ -1729,8 +1734,10 @@ public class KKTSolver {
          }
       }
       else {
-         myPardiso.factor (myVals);
-         if (myPardiso.getState() != PardisoSolver.FACTORED) {
+         myMatrixSolver.factor (myVals);
+         if (myPardiso != null && myPardiso.getState() != PardisoSolver.FACTORED) {
+            // PARDISO doesn't throw on factor failure; check state.
+            // cuDSS throws from inside factor() so by this point it's fine.
             throw new NumericalException (
                "Pardiso: unable to factor matrix: size="+(mySizeM+myNumG)+
                ", nnz=" + myNumVals + ", error=" + myPardiso.getErrorMessage());
@@ -1742,7 +1749,10 @@ public class KKTSolver {
    }
 
    public int getNumNonZerosInFactors() {
-      return myPardiso.getNumNonZerosInFactors();
+      // Only PARDISO exposes this. Other backends return -1 to indicate
+      // "not available" rather than throw, since callers use this for
+      // diagnostics only.
+      return (myPardiso != null) ? myPardiso.getNumNonZerosInFactors() : -1;
    }
 
    public boolean lastSolveWasIterative() {
@@ -1755,6 +1765,7 @@ public class KKTSolver {
          myMatrixSolver = null;
          myPardiso = null;
          myUmfpack = null;
+         myCuDss = null;
       }
    }
 
