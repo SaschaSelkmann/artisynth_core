@@ -90,6 +90,9 @@ public class CuDssSolver implements DirectSolver {
    private static native int    doSolve   (long handle, double[] b, double[] x);
    private static native int    doSolveMulti (
       long handle, int nrhs, double[] B, double[] X);
+   private static native int    doIterativeSolve (
+      long handle, double[] vals, double[] b, double[] x,
+      double tolRel, int maxIter);
    private static native void   doDispose (long handle);
    private static native String doGetLastError (long handle);
    private static native String doGetVersion();
@@ -369,15 +372,100 @@ public class CuDssSolver implements DirectSolver {
       check (doSolve (myHandle, b.getBuffer(), x.getBuffer()), "solve");
    }
 
+   /**
+    * Equivalent to {@link PardisoSolver#autoFactorAndSolve} for cuDSS.
+    * <ul>
+    *   <li>If {@code tolExp <= 0} or {@code myState != FACTORED}: do a
+    *       full {@link #factor()}+{@link #solve(VectorNd,VectorNd)} pair.
+    *       The first call after analyze always lands here.</li>
+    *   <li>Else: re-extract current matrix values from the {@code Matrix}
+    *       reference stored at analyze time, run BiCGStab preconditioned
+    *       by the existing factor, and accept the result if it converges
+    *       within {@code maxIter}. If BiCGStab fails (breakdown,
+    *       non-convergence), fall back to a real factor + solve.</li>
+    * </ul>
+    *
+    * <p>The matrix used for SpMV during BiCGStab is the <i>current</i>
+    * value of the matrix (re-extracted from {@code myMatrix}), while the
+    * preconditioner is the <i>stale</i> factor from the previous
+    * factor() call. That's the same trick PARDISO's hybrid solve plays.
+    */
    @Override
-   public void autoFactorAndSolve (VectorNd x, VectorNd b, int tolExp) {
+   public synchronized void autoFactorAndSolve (
+      VectorNd x, VectorNd b, int tolExp) {
+      if (myState == UNSET || myMatrix == null) {
+         throw new ImproperStateException (
+            "analyze(Matrix) or analyzeAndFactor(Matrix) not previously called");
+      }
+      if (tolExp <= 0 || myState != FACTORED) {
+         factor();
+         solve (x, b);
+         return;
+      }
+      // Re-extract current matrix values.
+      myMatrix.getCRSValues (myVals, myPart, mySize, mySize);
+      double[] vals = myVals;
+      if (myVals.length != myNumVals) {
+         vals = new double[myNumVals];
+         System.arraycopy (myVals, 0, vals, 0, myNumVals);
+      }
+      // BiCGStab needs the b and x arrays sized to exactly mySize. Most
+      // callers pass exact-sized VectorNds (size == buffer length), but
+      // VectorNd may have a longer underlying buffer; we work on copies
+      // sized to mySize to avoid feeding stale tail bytes to the GPU.
+      double[] bArr;
+      if (b.size() == mySize && b.getBuffer().length == mySize) {
+         bArr = b.getBuffer();
+      }
+      else {
+         bArr = new double[mySize];
+         for (int i = 0; i < mySize; i++) bArr[i] = b.get(i);
+      }
+      double[] xArr = new double[mySize];
+      double tolRel = Math.pow (10.0, -tolExp);
+      // PARDISO defaults to ~32 CGS iterations before giving up. Use the
+      // same budget for parity.
+      int maxIter = 32;
+      int rc = doIterativeSolve (myHandle, vals, bArr, xArr, tolRel, maxIter);
+      if (rc > 0) {
+         // Success: rc is iteration count.
+         if (x.size() < mySize) x.setSize (mySize);
+         for (int i = 0; i < mySize; i++) x.set (i, xArr[i]);
+         return;
+      }
+      // BiCGStab failed (rc <= 0). Fall back to a real factor + solve.
+      // This refactors with the current values; the stale factor is
+      // replaced.
       factor();
       solve (x, b);
    }
 
    @Override
    public boolean hasAutoIterativeSolving() {
-      return false;
+      // True only if we have a Matrix reference to re-extract values from.
+      // The array-CSR analyze path (used by KKTSolver) leaves myMatrix
+      // null, and that path uses iterativeSolve(double[]...) directly.
+      return myMatrix != null;
+   }
+
+   /**
+    * Iterative-solve entry point for callers that build CSR arrays
+    * themselves (like {@link KKTSolver}). Pushes {@code vals} as the
+    * current matrix values, runs BiCGStab using the existing cuDSS
+    * factor as a preconditioner, and writes the solution into {@code x}.
+    *
+    * <p>Returns the number of BiCGStab iterations on success ({@code > 0}),
+    * or a negative status code on failure. Callers should refactor and
+    * fall back to a direct solve if the return value is non-positive.
+    */
+   public synchronized int iterativeSolve (
+      double[] vals, double[] x, double[] b, int tolExp) {
+      if (myState != FACTORED) {
+         return -1;
+      }
+      double tolRel = Math.pow (10.0, -tolExp);
+      int maxIter = 32;
+      return doIterativeSolve (myHandle, vals, b, x, tolRel, maxIter);
    }
 
    @Override

@@ -99,6 +99,34 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolveMulti
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doIterativeSolve
+  (JNIEnv* env, jclass /*cls*/, jlong handle,
+   jdoubleArray vals, jdoubleArray b, jdoubleArray x,
+   jdouble tolRel, jint maxIter) {
+   CuDssBridge* br = asBridge (handle);
+   if (!br) return -1;
+
+   jdouble* vp = env->GetDoubleArrayElements (vals, nullptr);
+   jdouble* bp = env->GetDoubleArrayElements (b,    nullptr);
+   jdouble* xp = env->GetDoubleArrayElements (x,    nullptr);
+   if (!vp || !bp || !xp) {
+      if (vp) env->ReleaseDoubleArrayElements (vals, vp, JNI_ABORT);
+      if (bp) env->ReleaseDoubleArrayElements (b,    bp, JNI_ABORT);
+      if (xp) env->ReleaseDoubleArrayElements (x,    xp, JNI_ABORT);
+      return -1;
+   }
+   int iters = 0;
+   int status = br->iterativeSolveBiCGStab (
+      (const double*)vp, (const double*)bp, (double*)xp,
+      (double)tolRel, (int)maxIter, &iters);
+   env->ReleaseDoubleArrayElements (vals, vp, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (b,    bp, JNI_ABORT);
+   // Commit x back to Java.
+   env->ReleaseDoubleArrayElements (x,    xp, (status == 0) ? 0 : JNI_ABORT);
+   // Return iteration count on success, negative status on failure.
+   return (jint)((status == 0) ? iters : status);
+}
+
 JNIEXPORT void JNICALL Java_maspack_solvers_CuDssSolver_doDispose
   (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
    CuDssBridge* b = asBridge (handle);

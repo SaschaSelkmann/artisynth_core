@@ -581,6 +581,116 @@ public class CuDssSolverTest extends UnitTest {
       testMultiRhsConsistency();
       testMultiRhsGrowShrink();
       testSymmetricIndefiniteKkt();
+
+      // Stage (c) additions: BiCGStab hybrid solve
+      testHybridSolveBasic();
+      testHybridSolveSpdBigger();
+      testHybridSolveArrayPath();
+   }
+
+   // After an initial factor, autoFactorAndSolve(tolExp>0) must run
+   // BiCGStab using the stale factor as preconditioner and produce a
+   // correct answer for the CURRENT (modified) matrix values.
+   private void testHybridSolveBasic() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         SparseCRSMatrix M = buildSpd5();
+         VectorNd b = new VectorNd (new double[] { 7, 12, 20, 9, 14 });
+         VectorNd x = new VectorNd (5);
+         s.analyze (M, 5, Matrix.SPD);
+         s.factor();
+         s.solve (x, b);
+
+         if (!s.hasAutoIterativeSolving()) {
+            throw new TestException (
+               "hasAutoIterativeSolving() returned false after analyze(Matrix)");
+         }
+
+         // Perturb M so that the stale factor is *close* to A but not exact.
+         // The 1.05 scale keeps the matrix SPD and gives BiCGStab something
+         // to converge to.
+         M.scale (1.05);
+
+         // Pick a different RHS to ensure we're not just re-using cached x.
+         VectorNd b2 = new VectorNd (new double[] { 1, 2, 3, 4, 5 });
+         VectorNd x2 = new VectorNd (5);
+         s.autoFactorAndSolve (x2, b2, /*tolExp=*/10);
+
+         // Verify residual of x2 against the CURRENT M.
+         checkResidual ("hybrid basic", M, x2, b2, 1e-9);
+      }
+      finally { s.dispose(); }
+   }
+
+   // Hybrid solve on a larger SPD matrix; BiCGStab should converge quickly
+   // because the perturbation is small.
+   private void testHybridSolveSpdBigger() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         int n = 40;
+         SparseNumberedBlockMatrix M = buildBlockSpd (n);
+         VectorNd b = randomVec (n);
+         VectorNd x = new VectorNd (n);
+
+         s.analyze (M, n, Matrix.SPD);
+         s.factor();
+         s.solve (x, b);
+         checkResidual ("hybrid bigger: initial", M, x, b, RESIDUAL_TOL);
+
+         // Perturb the block matrix slightly. SparseNumberedBlockMatrix
+         // doesn't expose a global scale, but we can modify a few block
+         // values directly. Just add a small diagonal jitter.
+         for (int i = 0; i < n; i++) {
+            Matrix1x1Block d = (Matrix1x1Block) M.getBlock (i, i);
+            d.m00 += 0.001;
+         }
+
+         VectorNd b2 = randomVec (n);
+         VectorNd x2 = new VectorNd (n);
+         s.autoFactorAndSolve (x2, b2, /*tolExp=*/10);
+         checkResidual ("hybrid bigger: after perturb", M, x2, b2, 1e-9);
+      }
+      finally { s.dispose(); }
+   }
+
+   // Verify the array-CSR iterativeSolve entry that KKTSolver will use.
+   private void testHybridSolveArrayPath() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         s.analyze (SPD5_VALS, SPD5_COL_IDXS_0, SPD5_ROW_OFFS_0, 5, Matrix.SPD);
+         s.factor (SPD5_VALS);
+
+         // Same matrix, different RHS, same factor.
+         double[] b2 = { 1, 2, 3, 4, 5 };
+         double[] x2 = new double[5];
+         int iters = s.iterativeSolve (
+            SPD5_VALS, x2, b2, /*tolExp=*/10);
+         if (iters <= 0) {
+            throw new TestException (
+               "iterativeSolve returned " + iters + " (expected positive)");
+         }
+         // Verify residual.
+         double[] Ax = new double[5];
+         for (int row = 0; row < 5; row++) {
+            for (int p = SPD5_ROW_OFFS_0[row]; p < SPD5_ROW_OFFS_0[row+1]; p++) {
+               int col = SPD5_COL_IDXS_0[p];
+               double v = SPD5_VALS[p];
+               Ax[row] += v * x2[col];
+               if (col != row) Ax[col] += v * x2[row];
+            }
+         }
+         double err = 0, bn = 0;
+         for (int i = 0; i < 5; i++) {
+            err += (Ax[i] - b2[i]) * (Ax[i] - b2[i]);
+            bn  += b2[i] * b2[i];
+         }
+         double rel = Math.sqrt (err) / Math.max (1.0, Math.sqrt (bn));
+         if (rel > 1e-9) {
+            throw new TestException (
+               "iterativeSolve relative residual " + rel + " too large");
+         }
+      }
+      finally { s.dispose(); }
    }
 
    public static void main (String[] args) {

@@ -23,6 +23,8 @@
 #define CUDSS_BRIDGE_H
 
 #include <cuda_runtime.h>
+#include <cusparse.h>
+#include <cublas_v2.h>
 #include "cudss.h"
 
 // Matrix-type constants exchanged with Java. These mirror the values used by
@@ -44,6 +46,10 @@
 #define CUDSS_BRIDGE_ERR_SOLVE               -7
 #define CUDSS_BRIDGE_ERR_STATE               -8
 #define CUDSS_BRIDGE_ERR_UNKNOWN_MTYPE       -9
+#define CUDSS_BRIDGE_ERR_CUSPARSE           -10
+#define CUDSS_BRIDGE_ERR_CUBLAS             -11
+#define CUDSS_BRIDGE_ERR_ITER_BREAKDOWN     -12
+#define CUDSS_BRIDGE_ERR_ITER_NO_CONVERGE   -13
 
 class CuDssBridge {
 public:
@@ -84,6 +90,28 @@ public:
    // nrhs == 1 are allowed (equivalent to single-RHS solve but slightly less
    // efficient due to descriptor rebuild).
    int solveMulti (int nrhs, const double* B, double* X);
+
+   // Preconditioned BiCGStab iterative solve. Uses the current cuDSS factor
+   // as a left preconditioner; the matrix-vector product A*x is performed via
+   // cuSPARSE SpMV using the values supplied via the `vals` argument (which
+   // also gets pushed to the device-side values buffer so subsequent factor()
+   // calls see the same values).
+   //
+   // tolRel: target relative residual ||A x - b|| / ||b||
+   // maxIter: hard cap on BiCGStab iterations
+   //
+   // Returns: number of iterations on success (>= 1, <= maxIter)
+   //          0 if the initial residual was already below tol (rare)
+   //          negative on failure (no convergence, breakdown, or backend error)
+   //
+   // For symmetric matrices stored upper-only (CUDSS_BRIDGE_MT_SYMMETRIC /
+   // _SPD), A*x is computed as
+   //     A x = U x + U^T x - diag(U) x
+   // where U is the upper-triangular CSR. For CUDSS_BRIDGE_MT_GENERAL the
+   // standard SpMV is used.
+   int iterativeSolveBiCGStab (
+      const double* vals, const double* b, double* x,
+      double tolRel, int maxIter, int* outIters);
 
    // Release all native resources. Safe to call multiple times.
    void dispose();
@@ -134,12 +162,47 @@ private:
    bool          myMatBMultiDesc;
    bool          myMatXMultiDesc;
 
+   // BiCGStab + SpMV scratch state, allocated lazily on first
+   // iterativeSolveBiCGStab() call. Owned by this bridge; freed on dispose
+   // and on setPattern (since n may change).
+   bool                  myIterInited;
+   cusparseHandle_t      myCuSparse;
+   cublasHandle_t        myCuBlas;
+   cusparseSpMatDescr_t  myCsrDesc;        // CSR view of (myValsD,
+                                           // myColIdxsD, myRowOffsD)
+   cusparseDnVecDescr_t  mySpmvInVec;      // bound to itVecBuf[i] per call
+   cusparseDnVecDescr_t  mySpmvOutVec;     // bound to itVecBuf[j] per call
+   void*                 mySpmvBuffer;     // workspace for cusparseSpMV
+   size_t                mySpmvBufferBytes;
+   // 8 device vectors of length n used by BiCGStab.
+   double*               myItR;
+   double*               myItRhat;
+   double*               myItP;
+   double*               myItV;
+   double*               myItS;
+   double*               myItT;
+   double*               myItY;
+   double*               myItZ;
+   double*               myItX;   // BiCGStab solution accumulator;
+                                  // distinct from myXVecD which cuDSS
+                                  // overwrites on every preconditioner solve
+   // Diagonal entries d_i = A[i,i], cached after first iterativeSolve call.
+   // Used to correct the (U + U^T) double-count of the diagonal in symmetric
+   // SpMV. Length n.
+   double*               myItDiag;
+   bool                  myItDiagDirty;    // true if vals changed since last
+                                           // extraction
+
    const char* myLastErr;
 
    void destroyMatrixDescriptors();
    void destroyMultiDescriptors();
    void freeDeviceBuffers();
    void freeMultiBuffers();
+   void freeIterativeBuffers();
+   int  ensureIterativeState();             // lazy init of cuSPARSE/cuBLAS/buffers
+   int  applyA (const double* xD, double* yD);  // y = A * x, dispatches on mtype
+   int  extractDiagonal();                  // populate myItDiag from myValsD
    bool setMtype (int flag, cudssMatrixType_t& mtype, cudssMatrixViewType_t& mview);
 };
 

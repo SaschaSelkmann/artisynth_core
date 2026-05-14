@@ -246,14 +246,16 @@ else
    CUDSS_JNI_TARGET = libCuDssJNI.unsupported
 endif
 
-CUDSS_JNI_OBJS = CuDssJNI.o cudssBridge.o
+CUDSS_JNI_OBJS = CuDssJNI.o cudssBridge.o cudssBridgeKernels.o
 CUDSS_CC_FLAGS = -O2 -fPIC -std=c++17 -DLINUX
 CUDSS_INCS     = -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux \
                  -I$(CUDSS_INC) -I$(CUDA_HOME)/include -I.
 CUDSS_LDS      = -L$(CUDSS_LIB) -lcudss \
-                 -L$(CUDA_HOME)/lib64 -lcudart \
+                 -L$(CUDA_HOME)/lib64 -lcudart -lcusparse -lcublas \
                  -Wl,-rpath,$(CUDSS_LIB) \
                  -Wl,-rpath,$(CUDA_HOME)/lib64
+NVCC           = $(CUDA_HOME)/bin/nvcc
+NVCC_FLAGS     = -O2 -Xcompiler -fPIC -std=c++17
 
 # Regenerate the JNI header from CuDssSolver.java whenever the .java file
 # is newer than the .h. Uses `javac -h` since javah was removed in JDK 10.
@@ -269,6 +271,9 @@ cudssBridge.o: cudssBridge.cc cudssBridge.h
 CuDssJNI.o: maspack_solvers_CuDssSolver.h CuDssJNI.cc cudssBridge.h
 	$(CC_COMP) $(CUDSS_CC_FLAGS) $(CUDSS_INCS) -c -o CuDssJNI.o CuDssJNI.cc
 
+cudssBridgeKernels.o: cudssBridgeKernels.cu
+	$(NVCC) $(NVCC_FLAGS) -c -o cudssBridgeKernels.o cudssBridgeKernels.cu
+
 $(LIB_TARGET_DIR)/$(CUDSS_JNI_TARGET): $(CUDSS_JNI_OBJS)
 	$(CC_COMP) $(CUDSS_CC_FLAGS) -shared -Wl,-rpath='$$ORIGIN' \
 	   -o $@ $(CUDSS_JNI_OBJS) $(CUDSS_LDS)
@@ -277,7 +282,7 @@ $(LIB_TARGET_DIR)/$(CUDSS_JNI_TARGET): $(CUDSS_JNI_OBJS)
 cudss: $(LIB_TARGET_DIR)/$(CUDSS_JNI_TARGET)
 
 cudss-clean:
-	rm -f $(CUDSS_JNI_OBJS) maspack_solvers_CuDssSolver.h \
+	rm -f $(CUDSS_JNI_OBJS) \
 	      $(LIB_TARGET_DIR)/$(CUDSS_JNI_TARGET)
 
 
