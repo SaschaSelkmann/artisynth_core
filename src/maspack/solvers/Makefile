@@ -10,6 +10,7 @@ JAVA_TEST_PROGRAMS = \
 	DantzigLCPSolverTest \
 	DantzigQPSolverTest \
 	PardisoSolverTest \
+	CuDssSolverTest \
 	MurtyLCPSolverTest \
 	CGSolverTest \
 	TriDiagonalSolverTest
