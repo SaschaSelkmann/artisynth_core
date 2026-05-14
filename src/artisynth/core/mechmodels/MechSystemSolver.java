@@ -695,22 +695,45 @@ public class MechSystemSolver {
       return myMatrixSolver;
    }
 
-   // KKT/Murty paths require iterative refinement and other features that
-   // the cuDSS backend does not yet support. When the regular direct
-   // solver is CuDss, every constrained solve falls back to Pardiso so
-   // contact/friction/implicit-friction systems keep working.
+   // Returns the solver backend KKTSolver should be constructed with for
+   // velocity-level KKT solves (constrainedBackwardEuler / fullBackwardEuler
+   // paths). With Stage C, KKTSolver now dispatches all analyze / factor /
+   // multi-RHS solve calls through the DirectSolver interface, so cuDSS is
+   // usable for the equality-KKT path. Contact and friction (LCP build via
+   // buildLCP and the Murty path) also dispatch through the same interface
+   // and technically work with cuDSS, but have not been benchmarked or
+   // numerically validated as of Stage D; users with contact-heavy models
+   // should compare residuals against Pardiso.
+   //
+   // The implicit-friction Murty path bypasses KKTSolver entirely and uses
+   // MurtyMechSolver, which still rejects non-Pardiso/Umfpack backends in
+   // its setSolverType. That fallback is handled separately in
+   // initMurtySolverIfNecessary().
+   //
+   // Static-equilibrium and position-correction paths (myStaticSolver,
+   // myConSolver) call this helper too but typically rely on PARDISO's
+   // iterative refinement; for those we still downgrade to Pardiso. They
+   // use kktSolverChoiceConservative() below.
    private SparseSolverId kktSolverChoice() {
       if (myMatrixSolver == SparseSolverId.CuDss) {
          if (!myWarnedCuDssKktFallback) {
             System.out.println (
-               "MechSystemSolver: KKT/constrained path requested while "+
-               "matrix solver is CuDss; falling back to Pardiso for "+
-               "constrained solves (regular direct solves still use cuDSS).");
+               "MechSystemSolver: KKT path will use cuDSS for velocity solves. "+
+               "Implicit-friction (Murty) solves still fall back to Pardiso.");
             myWarnedCuDssKktFallback = true;
          }
-         return SparseSolverId.Pardiso;
+         return SparseSolverId.CuDss;
       }
       return myMatrixSolver;
+   }
+
+   // Conservative variant for paths that depend on PARDISO-specific features
+   // (iterative refinement during constraint projection, perturbed-pivot
+   // diagnostics during static analysis). These always downgrade cuDSS to
+   // Pardiso.
+   private SparseSolverId kktSolverChoiceConservative() {
+      return (myMatrixSolver == SparseSolverId.CuDss)
+             ? SparseSolverId.Pardiso : myMatrixSolver;
    }
 
    /** 
@@ -2029,7 +2052,9 @@ public class MechSystemSolver {
       }
       
       if (myStaticSolver == null) {
-         myStaticSolver = new KKTSolver(kktSolverChoice());
+         // Static solver relies on PARDISO-specific diagnostics and
+         // iterative refinement.
+         myStaticSolver = new KKTSolver(kktSolverChoiceConservative());
       }
 
       updateConstraintMatrices (0, false);
@@ -2649,7 +2674,9 @@ public class MechSystemSolver {
          return;
       }            
       if (myConSolver == null) {
-         myConSolver = new KKTSolver(kktSolverChoice());
+         // Constraint-projection / position-correction path relies on
+         // PARDISO iterative refinement; downgrade cuDSS to Pardiso.
+         myConSolver = new KKTSolver(kktSolverChoiceConservative());
       }
       updateConstraintMatrices (h, false);
       if (myGsize == 0 && myNsize == 0) {
@@ -2735,7 +2762,9 @@ public class MechSystemSolver {
          return;
       }            
       if (myConSolver == null) {
-         myConSolver = new KKTSolver(kktSolverChoice());
+         // Constraint-projection / position-correction path relies on
+         // PARDISO iterative refinement; downgrade cuDSS to Pardiso.
+         myConSolver = new KKTSolver(kktSolverChoiceConservative());
       }
       updateConstraintMatrices (h, false);
 
@@ -2840,7 +2869,9 @@ public class MechSystemSolver {
          return false;
       }            
 //      if (myConSolver == null) {
-//         myConSolver = new KKTSolver(kktSolverChoice());
+//         // Constraint-projection / position-correction path relies on
+         // PARDISO iterative refinement; downgrade cuDSS to Pardiso.
+         myConSolver = new KKTSolver(kktSolverChoiceConservative());
 //      }
       updateConstraintMatrices (0, false);
       myVel.setSize (velSize);
@@ -3061,7 +3092,9 @@ public class MechSystemSolver {
          return false;
       }            
       if (myConSolver == null) {
-         myConSolver = new KKTSolver(kktSolverChoice());
+         // Constraint-projection / position-correction path relies on
+         // PARDISO iterative refinement; downgrade cuDSS to Pardiso.
+         myConSolver = new KKTSolver(kktSolverChoiceConservative());
       }
       updateConstraintMatrices (0, false);
 
