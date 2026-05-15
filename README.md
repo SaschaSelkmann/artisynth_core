@@ -64,6 +64,181 @@ use; complex FEM models may run slower than on a native Linux desktop.
 
 --------------------------------------------------------------------
 
+### Optional: GPU-accelerated solver via NVIDIA cuDSS
+
+ArtiSynth ships with an optional cuDSS-based sparse direct solver
+backend that accelerates the linear-system solves at the core of every
+implicit integrator (BackwardEuler, ConstrainedBackwardEuler,
+FullBackwardEuler, Trapezoidal, static), plus the KKT, contact, and
+friction paths via `KKTSolver` and `MurtyMechSolver`. PARDISO remains
+the default; cuDSS is opt-in.
+
+The backend includes a preconditioned BiCGStab "hybrid solve" path
+(equivalent to PARDISO's CGS-with-stale-factor) so the per-step
+factorization can be skipped on stable matrices.
+
+**When cuDSS wins:** large FE-heavy models (~50k+ DOF), constrained FE
+with bilateral attachments and joints. For these workloads cuDSS
+typically runs 1.2-1.7x faster than PARDISO 8-thread on a single
+modern GPU. Validated against PARDISO at 1e-8 relative residual on
+equality KKT systems.
+
+**When cuDSS loses:** small models (a few hundred to a few thousand
+DOF). For small contact/friction demos, GPU launch overhead dominates
+and PARDISO can be 2-20x faster. The bottleneck for these models is
+typically CPU-side FEM assembly, which is *not* what the solver
+accelerates.
+
+#### Prerequisites
+
+- NVIDIA GPU with compute capability >= 7.0 (Volta or newer).
+- CUDA 12 toolkit (`nvcc`, `cuda_runtime.h`).
+- NVIDIA cuDSS 0.7.x for CUDA 12 (`libcudss.so`, `cudss.h`).
+- cuSPARSE and cuBLAS (ship with the CUDA toolkit).
+- `gcc` / `g++` to build the JNI bridge.
+- Same Java toolchain as the regular ArtiSynth build.
+
+#### Installing CUDA and cuDSS on Ubuntu / Debian / WSL2
+
+Add NVIDIA's APT repository:
+
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+```
+
+(Substitute `ubuntu2204` etc. for your distribution as needed.)
+
+Install the CUDA toolkit and cuDSS for CUDA 12:
+
+```bash
+sudo apt install cuda-toolkit-12-8 libcudss0-dev-cuda-12
+```
+
+On WSL2 the CUDA installation uses the Windows-side GPU via NVIDIA's
+WSL driver, so no additional driver is needed inside WSL itself. The
+Windows host must have a recent enough NVIDIA driver (R555+ for CUDA
+12.8).
+
+Verify the install:
+
+```bash
+nvcc --version                        # should report CUDA 12.x
+ls /usr/include/libcudss/12/cudss.h   # should exist
+nvidia-smi                            # should list your GPU
+```
+
+The build links explicitly against the CUDA-12 variant of cuDSS at
+`/usr/lib/x86_64-linux-gnu/libcudss/12/`, regardless of what
+`/etc/alternatives/libcudss.so` points to (which may default to
+CUDA-13 on multi-version installs).
+
+#### Building the cuDSS JNI bridge
+
+The regular `make` build does NOT compile any cuDSS code, so machines
+without CUDA continue to build normally. The bridge is opt-in:
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+cd src/maspack/solvers/lib
+make cudss
+```
+
+This produces `lib/Linux64/libCuDssJNI.so.0.7.1`. Successful build
+links against `libcudss.so.0`, `libcudart.so.12`, `libcusparse.so.12`,
+and `libcublas.so.12` (verify with `ldd lib/Linux64/libCuDssJNI.so.0.7.1`).
+
+Environment variable overrides for non-default installation paths:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CUDA_HOME` | `/usr/local/cuda` | CUDA toolkit root |
+| `CUDSS_INC` | `/usr/include/libcudss/12` | cuDSS headers |
+| `CUDSS_LIB` | `/usr/lib/x86_64-linux-gnu/libcudss/12` | cuDSS shared libs |
+
+#### Running ArtiSynth with cuDSS
+
+Once `lib/Linux64/libCuDssJNI.so.0.7.1` exists, select cuDSS via the
+`-matrixSolver` CLI option:
+
+```bash
+source setup.bash
+artisynth -matrixSolver CuDss -model artisynth.demos.fem.BigBeam3dConstrainedKKT
+```
+
+`CuDss` is also selectable from the GUI: open the MechModel's property
+panel and change `matrixSolver` to `CuDss`. Models with implicit
+friction (`-useImplicitFriction`) also pick up cuDSS automatically.
+
+If the native library is missing or the GPU is unavailable, ArtiSynth
+prints a clear message and falls back to PARDISO without crashing:
+
+```
+Matrix solver CuDss requested but cuDSS native library is unavailable;
+staying on Pardiso
+```
+
+#### Benchmark demos
+
+These models are included specifically as cuDSS benchmarks:
+
+| Demo | Integrator | What it exercises |
+|---|---|---|
+| `artisynth.demos.fem.BigBeam3dBE` | `BackwardEuler` (unconstrained) | Regular FE direct solve through `myDirectSolver` |
+| `artisynth.demos.fem.BigBeam3dConstrainedKKT` | `ConstrainedBackwardEuler` | KKT path with bilateral constraints |
+| `artisynth.demos.fem.ArticulatedFemBig` | `ConstrainedBackwardEuler` | KKT + rigid bodies + hinge joints + FEM attachments |
+
+Each accepts `-nx`, `-ny` (or `-nelemsx`, `-nelemsz`) for mesh
+refinement; defaults are sized to make the GPU advantage visible.
+
+#### Diagnostics: profiling per-phase timing
+
+To see where each step's time goes (transfer / factor / solve / BiCGStab):
+
+```bash
+CUDSS_BRIDGE_TIMING=1 artisynth -matrixSolver CuDss \
+   -model artisynth.demos.fem.ArticulatedFemBig
+```
+
+The bridge emits stderr lines like:
+
+```
+[cudss-timing] factor n=33458 nnz=617447: H2D vals=0.65ms FACTOR=47.55ms total=48.20ms
+[cudss-timing] solve n=33458: H2D b=0.14ms SOLVE=11.55ms D2H x=0.09ms total=11.75ms
+[cudss-timing] bicgstab n=33458 iters=2: total=12.40ms (6.20ms/iter)
+```
+
+The same toggle also enables ArtiSynth's `profileKKTSolveTime` in the
+provided benchmark demos, giving a complete CPU-vs-GPU breakdown.
+Programmatic toggle from Java: `CuDssSolver.setTimingEnabled(true)`.
+
+#### Supported features
+
+| Path | Backend | Notes |
+|---|---|---|
+| Regular implicit solve (`backwardEuler`) | cuDSS | BiCGStab hybrid available |
+| Constrained KKT (`constrainedBackwardEuler`, `Trapezoidal`, `fullBackwardEuler`) | cuDSS | via generalized `KKTSolver` |
+| Static analysis (`StaticIncrementalStep`, `StaticLineSearch`) | cuDSS | via `KKTSolver` |
+| Position-correction projection | cuDSS | via `KKTSolver` |
+| Rigid-body contact projection | cuDSS | via `RigidBodySolver` |
+| Unilateral contact (LCP via `KKTSolver.buildLCP`) | cuDSS | multi-RHS path |
+| Active-set contact pivoting (`MurtyMechSolver`) | cuDSS | analyze/factor/solve dispatched generically |
+| Friction (explicit and implicit) | cuDSS | Murty path |
+| Explicit integrators (RK4, ForwardEuler, SymplecticEuler) | n/a | no linear solve to accelerate; matrix solver unused |
+
+#### Known limitations
+
+- `UmfpackSolver` is not supported as a Murty backend (rejected at
+  construction). PARDISO and cuDSS only.
+- Custom user-defined `FemMaterial` subclasses run on CPU for assembly;
+  the solver is independent of material choice.
+- Linux only; cuDSS has no macOS support and the Windows toolchain
+  hasn't been validated. `CuDssSolver.isAvailable()` returns false
+  cleanly on unsupported platforms.
+
+--------------------------------------------------------------------
+
 ### Files in the top directory:
 
 <dl>
