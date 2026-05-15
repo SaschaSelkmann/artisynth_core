@@ -727,13 +727,17 @@ public class MechSystemSolver {
       return myMatrixSolver;
    }
 
-   // Conservative variant for paths that depend on PARDISO-specific features
-   // (iterative refinement during constraint projection, perturbed-pivot
-   // diagnostics during static analysis). These always downgrade cuDSS to
-   // Pardiso.
+   // Conservative variant retained for paths we have not yet validated
+   // under cuDSS. Originally this downgraded static + position-correction
+   // solvers to PARDISO because they leaned on PARDISO-specific iterative
+   // refinement and perturbed-pivot diagnostics. After Stage (c) and K1,
+   // cuDSS exposes iterative refinement via CUDSS_CONFIG_IR_N_STEPS (and
+   // a programmatic toggle), and KKTSolver dispatches PARDISO-only
+   // diagnostics behind instanceof guards. So we now route these paths
+   // to cuDSS as well; if a specific path turns out to need PARDISO,
+   // a guard can be added at that call site rather than here.
    private SparseSolverId kktSolverChoiceConservative() {
-      return (myMatrixSolver == SparseSolverId.CuDss)
-             ? SparseSolverId.Pardiso : myMatrixSolver;
+      return myMatrixSolver;
    }
 
    /** 
