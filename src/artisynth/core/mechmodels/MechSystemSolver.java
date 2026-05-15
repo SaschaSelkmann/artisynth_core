@@ -718,8 +718,9 @@ public class MechSystemSolver {
       if (myMatrixSolver == SparseSolverId.CuDss) {
          if (!myWarnedCuDssKktFallback) {
             System.out.println (
-               "MechSystemSolver: KKT path will use cuDSS for velocity solves. "+
-               "Implicit-friction (Murty) solves still fall back to Pardiso.");
+               "MechSystemSolver: KKT / contact / friction paths will use "+
+               "cuDSS. Contact and friction support is experimental -- compare "+
+               "residuals against -matrixSolver Pardiso for validation.");
             myWarnedCuDssKktFallback = true;
          }
          return SparseSolverId.CuDss;
