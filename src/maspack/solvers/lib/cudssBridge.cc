@@ -41,6 +41,20 @@ bool CuDssBridge::timingEnabled() {
    return g_timing;
 }
 
+int CuDssBridge::setIterativeRefinementSteps (int n) {
+   if (!myInitialized || !myConfig) {
+      myLastErr = "setIterativeRefinementSteps called before init";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (!dssOk (cudssConfigSet (
+          myConfig, CUDSS_CONFIG_IR_N_STEPS, &n, sizeof(int)))) {
+      myLastErr = "cudssConfigSet(IR_N_STEPS) failed";
+      return CUDSS_BRIDGE_ERR_INIT;
+   }
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
 CuDssBridge::CuDssBridge()
    : myInitialized(false),
      myHasPattern(false),

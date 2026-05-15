@@ -4255,6 +4255,15 @@ public class MechSystemSolver {
    private void initMurtySolverIfNecessary() {
       if (myMurtySolver == null) {
          myMurtySolver = new MurtyMechSolver();
+         // Propagate the user-selected backend to Murty. Without this,
+         // implicit-friction models always run on PARDISO regardless of
+         // -matrixSolver. Murty internally rejects Umfpack, so anything
+         // other than Pardiso or CuDss stays as the Murty default
+         // (Pardiso).
+         if (myMatrixSolver == SparseSolverId.Pardiso ||
+             myMatrixSolver == SparseSolverId.CuDss) {
+            myMurtySolver.setSolverType (myMatrixSolver);
+         }
          myMurtySolver.setHybridSolves (myHybridSolveP);
       }
    }

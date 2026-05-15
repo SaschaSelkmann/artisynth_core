@@ -308,6 +308,7 @@ public class MurtyMechSolver {
    DirectSolver myMatrixSolver;      // current sparse solver
    UmfpackSolver myUmfpack;          // Umfpack solver, if used
    PardisoSolver myPardiso;          // Pardiso solver, if used
+   CuDssSolver   myCuDss;            // cuDSS solver, if used
    int mySavedMaxRefinementSteps;    // saved value of Pardiso refinement steps
    boolean myAMatrixFactored;        // A matrix factored and ready for solution
    
@@ -554,6 +555,11 @@ public class MurtyMechSolver {
             myMatrixSolver = myUmfpack;
             break;
          }
+         case CuDss: {
+            myCuDss = new CuDssSolver();
+            myMatrixSolver = myCuDss;
+            break;
+         }
          default: {
             throw new IllegalArgumentException (
                "Solver type " + solverType + " not supported");
@@ -570,6 +576,10 @@ public class MurtyMechSolver {
       else if (solver instanceof UmfpackSolver) {
          myUmfpack = (UmfpackSolver)solver;
          mySolverType = SparseSolverId.Umfpack;
+      }
+      else if (solver instanceof CuDssSolver) {
+         myCuDss = (CuDssSolver)solver;
+         mySolverType = SparseSolverId.CuDss;
       }
       else {
          throw new UnsupportedOperationException ("Unsupported solver "+solver);
@@ -884,36 +894,31 @@ public class MurtyMechSolver {
    }
 
    private void analyzeA (int[] colIdxs) {
-      if (mySolverType == SparseSolverId.Pardiso) {
-         int[] rowOffs = Arrays.copyOf (myRowOffsA, mySizeA+1);
-         for (int i=0; i<rowOffs.length; i++) {
-            rowOffs[i]++;
-         }
-         for (int i=0; i<colIdxs.length; i++) {
-            colIdxs[i]++;
-         }
-         myAColIdxs = colIdxs;
-         myARowOffs = rowOffs;
-         //getAValues (null, true);
-         myAnalyzeTimer.restart();
-         myPardiso.analyze (
-            myValuesA, colIdxs, rowOffs, mySizeA, Matrix.SYMMETRIC);
-         if (myPardiso.getState() == PardisoSolver.UNSET) {
-            throw new NumericalException (
-               "Pardiso: unable to analyze matrix: " +
-               myPardiso.getErrorMessage());
-         }
-         myAnalyzeTimer.stop();
-         //getAValues (null, false);
-         myTotalAnalyzeCnt++;
-         myHybridCnt = 0;
-         myAvgDirectTime = 0;
-         myAMatrixFactored = false;
-      }
-      else {
+      if (mySolverType == SparseSolverId.Umfpack) {
          throw new UnsupportedOperationException (
             "Solver " + mySolverType + " is not supported");
       }
+      int[] rowOffs = Arrays.copyOf (myRowOffsA, mySizeA+1);
+      // PARDISO wants 1-based CRS indices; cuDSS wants 0-based.
+      if (mySolverType == SparseSolverId.Pardiso) {
+         for (int i = 0; i < rowOffs.length; i++) rowOffs[i]++;
+         for (int i = 0; i < colIdxs.length; i++) colIdxs[i]++;
+      }
+      myAColIdxs = colIdxs;
+      myARowOffs = rowOffs;
+      myAnalyzeTimer.restart();
+      myMatrixSolver.analyze (
+         myValuesA, colIdxs, rowOffs, mySizeA, Matrix.SYMMETRIC);
+      if (myPardiso != null && myPardiso.getState() == PardisoSolver.UNSET) {
+         throw new NumericalException (
+            "Pardiso: unable to analyze matrix: " +
+            myPardiso.getErrorMessage());
+      }
+      myAnalyzeTimer.stop();
+      myTotalAnalyzeCnt++;
+      myHybridCnt = 0;
+      myAvgDirectTime = 0;
+      myAMatrixFactored = false;
    }
 
    public MatrixNd getA() {
@@ -951,59 +956,88 @@ public class MurtyMechSolver {
    }
 
    private void factorA () {
-      if (mySolverType == SparseSolverId.Pardiso) {
-         myFactorTimer.restart();
-         myPardiso.factor (myValuesA);
-         if (myPardiso.getState() != PardisoSolver.FACTORED) {
-            throw new NumericalException (
-               "Pardiso: unable to factor matrix: size="+mySizeA+", nnz=" +
-               myNumValsA + ", error=" + myPardiso.getErrorMessage());
-         }
-         myFactorTimer.stop();
-         myTotalFactorCnt++;
-         myAMatrixFactored = true;
-      }
-      else {
+      if (mySolverType == SparseSolverId.Umfpack) {
          throw new UnsupportedOperationException (
             "Solver " + mySolverType + " is not supported");
       }
+      myFactorTimer.restart();
+      myMatrixSolver.factor (myValuesA);
+      if (myPardiso != null && myPardiso.getState() != PardisoSolver.FACTORED) {
+         throw new NumericalException (
+            "Pardiso: unable to factor matrix: size=" + mySizeA + ", nnz=" +
+            myNumValsA + ", error=" + myPardiso.getErrorMessage());
+      }
+      myFactorTimer.stop();
+      myTotalFactorCnt++;
+      myAMatrixFactored = true;
    }
 
    private void solveA (VectorNd y, VectorNd x) {
-      if (mySolverType == SparseSolverId.Pardiso) {
-         mySolveTimer.restart();
-         myPardiso.solve (y, x);
-         mySolveTimer.stop();
-         mySolveCnt++;
-         myTotalSolveCnt++;
-      }
-      else {
+      if (mySolverType == SparseSolverId.Umfpack) {
          throw new UnsupportedOperationException (
             "Solver " + mySolverType + " is not supported");
       }
+      mySolveTimer.restart();
+      myMatrixSolver.solve (y, x);
+      mySolveTimer.stop();
+      mySolveCnt++;
+      myTotalSolveCnt++;
    }
 
    private void solveA (MatrixNd Y, MatrixNd X) {
-      if (mySolverType == SparseSolverId.Pardiso) {
-         mySolveTimer.restart();
-         int nrows= Y.rowSize(); 
-         myPardiso.solve (Y.getBuffer(), X.getBuffer(), nrows);
-         mySolveTimer.stop();
-         mySolveCnt += nrows;
-         myTotalSolveCnt += nrows;
-      }
-      else {
+      if (mySolverType == SparseSolverId.Umfpack) {
          throw new UnsupportedOperationException (
             "Solver " + mySolverType + " is not supported");
       }
+      mySolveTimer.restart();
+      int nrows = Y.rowSize();
+      // Both PARDISO and cuDSS implement multi-RHS via the DirectSolver
+      // interface (PARDISO natively, cuDSS via solveMulti -> cuSPARSE
+      // column-major path).
+      myMatrixSolver.solve (Y.getBuffer(), X.getBuffer(), nrows);
+      mySolveTimer.stop();
+      mySolveCnt += nrows;
+      myTotalSolveCnt += nrows;
    }
 
    private boolean canDoHybridSolve() {
-      if (myHybridSolves && myPardiso != null &&
+      // Hybrid solves work for any backend that exposes
+      // iterativeSolve(...) via DirectSolver (PARDISO, cuDSS).
+      if (myHybridSolves && myMatrixSolver != null &&
+          myMatrixSolver.hasAutoIterativeSolving() &&
           mySizeND == 0 && myAvgDirectTime > 0) {
          return (myAvgHybridTime < myHybridRatio*myAvgDirectTime);
       }
       return false;
+   }
+
+   // PARDISO and cuDSS each have a "tighten solution accuracy via
+   // iterative refinement" knob that the pivoting loop deliberately turns
+   // off (refinement is wasted when each solve is followed by an
+   // active-set change). These helpers save the current setting, set it
+   // to zero, and restore it on exit -- working for whichever backend is
+   // in use.
+   private void disableRefinement() {
+      if (myPardiso != null) {
+         mySavedMaxRefinementSteps = myPardiso.getMaxRefinementSteps();
+         myPardiso.setMaxRefinementSteps (0);
+      }
+      else if (myCuDss != null) {
+         // cuDSS bridge has IR_N_STEPS=4 by default; remember 4 and zero
+         // it here. (The native side has no getter; we just track the
+         // default.)
+         mySavedMaxRefinementSteps = 4;
+         myCuDss.setIterativeRefinementSteps (0);
+      }
+   }
+
+   private void restoreRefinement() {
+      if (myPardiso != null) {
+         myPardiso.setMaxRefinementSteps (mySavedMaxRefinementSteps);
+      }
+      else if (myCuDss != null) {
+         myCuDss.setIterativeRefinementSteps (mySavedMaxRefinementSteps);
+      }
    }
 
    private double updateAvgTime (double tnew, double tavg) {
@@ -1018,7 +1052,9 @@ public class MurtyMechSolver {
 
    boolean hybridSolveA() {
       myTimer.start();
-      int status = myPardiso.iterativeSolve (
+      // PARDISO does preconditioned CGS; cuDSS does preconditioned
+      // BiCGStab via cuSPARSE. Both expose the same signature.
+      int status = myMatrixSolver.iterativeSolve (
          myValuesA, myY.getBuffer(), myB.getBuffer(), myHybridSolveTol);
       myTimer.stop();
       if (status > 0 && !myFakeHybridFail) {
@@ -2936,8 +2972,11 @@ public class MurtyMechSolver {
 
       myTol = myDefaultTol;
 
-      mySavedMaxRefinementSteps = myPardiso.getMaxRefinementSteps();
-      myPardiso.setMaxRefinementSteps(0);
+      // Disable iterative refinement during active-set pivoting. PARDISO's
+      // refinement and cuDSS's CUDSS_CONFIG_IR_N_STEPS both add cost per
+      // solve that's wasted here because pivoting accepts coarse solutions
+      // and immediately re-solves with a different active set.
+      disableRefinement();
 
       updateAndSolveA (stateN, stateD);
       myNTActivityFrozen = ((flags & NT_INACTIVE) != 0);
@@ -2967,7 +3006,7 @@ public class MurtyMechSolver {
       else {
          extractMGSolution (vel, lam);
       }
-      myPardiso.setMaxRefinementSteps(mySavedMaxRefinementSteps);
+      restoreRefinement();
       myNTActivityFrozen = false;
       getStateN (stateN);
       getStateD (stateD);
@@ -3021,9 +3060,8 @@ public class MurtyMechSolver {
 
       setFrictionLimits (flim);
 
-      mySavedMaxRefinementSteps = myPardiso.getMaxRefinementSteps();
-      myPardiso.setMaxRefinementSteps(0);
-      
+      disableRefinement();
+
       myTol = myDefaultTol;
 
       updateAndSolveA (stateN, stateD);
@@ -3039,7 +3077,7 @@ public class MurtyMechSolver {
          extractMGSolution (vel, lam);      
       }
       
-      myPardiso.setMaxRefinementSteps(mySavedMaxRefinementSteps);
+      restoreRefinement();
       myNTActivityFrozen = false;
       getStateN (stateN);
       getStateD (stateD);

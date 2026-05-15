@@ -149,6 +149,13 @@ JNIEXPORT void JNICALL Java_maspack_solvers_CuDssSolver_doSetTimingEnabled
    CuDssBridge::setTimingEnabled (on == JNI_TRUE);
 }
 
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSetIrSteps
+  (JNIEnv* /*env*/, jclass /*cls*/, jlong handle, jint n) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   return (jint) b->setIterativeRefinementSteps ((int)n);
+}
+
 JNIEXPORT jstring JNICALL Java_maspack_solvers_CuDssSolver_doGetVersion
   (JNIEnv* env, jclass /*cls*/) {
    int major = 0, minor = 0, patch = 0;

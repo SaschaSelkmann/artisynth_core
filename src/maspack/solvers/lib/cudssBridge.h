@@ -132,6 +132,12 @@ public:
    static void setTimingEnabled (bool on);
    static bool timingEnabled();
 
+   // Update cuDSS's CUDSS_CONFIG_IR_N_STEPS for this bridge's config.
+   // The default of 4 is set in init(). MurtyMechSolver temporarily
+   // sets this to 0 during specific solves where PARDISO would also
+   // disable refinement (mirrors PARDISO.setMaxRefinementSteps(0)).
+   int setIterativeRefinementSteps (int n);
+
 private:
    bool myInitialized;
    bool myHasPattern;

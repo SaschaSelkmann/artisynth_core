@@ -97,6 +97,7 @@ public class CuDssSolver implements DirectSolver {
    private static native String doGetLastError (long handle);
    private static native String doGetVersion();
    private static native void   doSetTimingEnabled (boolean on);
+   private static native int    doSetIrSteps (long handle, int n);
 
    private static synchronized void doLoadLibraries() {
       if (myInitStatus != INIT_UNKNOWN) {
@@ -127,6 +128,28 @@ public class CuDssSolver implements DirectSolver {
          return;
       }
       doSetTimingEnabled (on);
+   }
+
+   /**
+    * Sets cuDSS's CUDSS_CONFIG_IR_N_STEPS (number of iterative refinement
+    * passes applied after each cuDSS solve). Default is 4 (set in
+    * the native init). Mirrors {@link PardisoSolver#setMaxRefinementSteps}
+    * for the cases where {@link MurtyMechSolver} disables refinement
+    * during specific contact/friction solves.
+    *
+    * @param n number of IR passes; 0 disables IR
+    */
+   public synchronized void setIterativeRefinementSteps (int n) {
+      if (myHandle == 0L) {
+         throw new ImproperStateException ("Solver disposed");
+      }
+      int status = doSetIrSteps (myHandle, n);
+      if (status != 0) {
+         String detail = doGetLastError (myHandle);
+         throw new NumericalException (
+            "cuDSS setIterativeRefinementSteps failed"
+            + (detail != null ? ": " + detail : ""));
+      }
    }
 
    /**
