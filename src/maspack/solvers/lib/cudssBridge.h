@@ -123,6 +123,15 @@ public:
    // nullptr if the last call succeeded. Caller must not free.
    const char* getLastErrorMessage() const { return myLastErr; }
 
+   // Per-phase timing toggle. When enabled, the bridge prints lines like
+   //   [cudss-timing] factor:           45.2 ms
+   //   [cudss-timing] bicgstab(iter=2): 12.3 ms (1.5 ms/iter)
+   // to stderr for each major operation. Off by default; enable via
+   // Java CuDssSolver.setTimingEnabled(true) or by setting the
+   // CUDSS_BRIDGE_TIMING env var.
+   static void setTimingEnabled (bool on);
+   static bool timingEnabled();
+
 private:
    bool myInitialized;
    bool myHasPattern;

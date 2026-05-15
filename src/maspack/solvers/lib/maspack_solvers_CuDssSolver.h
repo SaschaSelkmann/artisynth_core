@@ -105,6 +105,14 @@ JNIEXPORT jstring JNICALL Java_maspack_solvers_CuDssSolver_doGetLastError
 JNIEXPORT jstring JNICALL Java_maspack_solvers_CuDssSolver_doGetVersion
   (JNIEnv *, jclass);
 
+/*
+ * Class:     maspack_solvers_CuDssSolver
+ * Method:    doSetTimingEnabled
+ * Signature: (Z)V
+ */
+JNIEXPORT void JNICALL Java_maspack_solvers_CuDssSolver_doSetTimingEnabled
+  (JNIEnv *, jclass, jboolean);
+
 #ifdef __cplusplus
 }
 #endif

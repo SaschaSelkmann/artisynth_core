@@ -96,6 +96,7 @@ public class CuDssSolver implements DirectSolver {
    private static native void   doDispose (long handle);
    private static native String doGetLastError (long handle);
    private static native String doGetVersion();
+   private static native void   doSetTimingEnabled (boolean on);
 
    private static synchronized void doLoadLibraries() {
       if (myInitStatus != INIT_UNKNOWN) {
@@ -104,11 +105,28 @@ public class CuDssSolver implements DirectSolver {
       try {
          NativeLibraryManager.load (nativeLibrary);
          myInitStatus = INIT_OK;
+         // Propagate the timing system property to the native bridge.
+         if (Boolean.getBoolean ("artisynth.cudss.timing")) {
+            doSetTimingEnabled (true);
+         }
       }
       catch (NativeLibraryException | UnsatisfiedLinkError e) {
          myInitErrMsg = e.getMessage();
          myInitStatus = ERR_CANT_LOAD_LIBRARIES;
       }
+   }
+
+   /**
+    * Programmatic toggle for the per-phase timing diagnostics. Equivalent
+    * to launching the JVM with {@code -Dartisynth.cudss.timing=true}.
+    * When enabled, each factor / solve / BiCGStab call prints a
+    * {@code [cudss-timing]} line to stderr.
+    */
+   public static void setTimingEnabled (boolean on) {
+      if (!isAvailable()) {
+         return;
+      }
+      doSetTimingEnabled (on);
    }
 
    /**

@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
+#include <ctime>
 
 namespace {
 
@@ -11,7 +13,33 @@ inline bool dssOk  (cudssStatus_t s) { return s == CUDSS_STATUS_SUCCESS; }
 inline bool spOk   (cusparseStatus_t s) { return s == CUSPARSE_STATUS_SUCCESS; }
 inline bool blOk   (cublasStatus_t s)   { return s == CUBLAS_STATUS_SUCCESS; }
 
+// Process-wide timing toggle. Set via setTimingEnabled() from Java or by
+// CUDSS_BRIDGE_TIMING env var at first init().
+static bool g_timing = false;
+static bool g_timing_initialized = false;
+
+// Returns wall time in milliseconds.
+inline double nowMs() {
+   timespec ts;
+   clock_gettime (CLOCK_MONOTONIC, &ts);
+   return ts.tv_sec * 1.0e3 + ts.tv_nsec * 1.0e-6;
+}
+
 } // anon
+
+void CuDssBridge::setTimingEnabled (bool on) {
+   g_timing = on;
+   g_timing_initialized = true;
+}
+
+bool CuDssBridge::timingEnabled() {
+   if (!g_timing_initialized) {
+      const char* env = std::getenv ("CUDSS_BRIDGE_TIMING");
+      if (env && env[0] && env[0] != '0') g_timing = true;
+      g_timing_initialized = true;
+   }
+   return g_timing;
+}
 
 CuDssBridge::CuDssBridge()
    : myInitialized(false),
@@ -320,11 +348,18 @@ int CuDssBridge::factor (const double* vals) {
       myLastErr = "factor called before analyze";
       return CUDSS_BRIDGE_ERR_STATE;
    }
+   const bool tm = timingEnabled();
+   const double t0 = tm ? nowMs() : 0;
    const size_t valBytes = (size_t)myNnz * sizeof(double);
    if (!cudaOk (cudaMemcpyAsync (myValsD, vals, valBytes,
                                  cudaMemcpyHostToDevice, myStream))) {
       myLastErr = "cudaMemcpyAsync failed copying matrix values";
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   double tCopyEnd = 0;
+   if (tm) {
+      cudaStreamSynchronize (myStream);
+      tCopyEnd = nowMs();
    }
    const cudssPhase_t phase = myFactored ? CUDSS_PHASE_REFACTORIZATION
                                          : CUDSS_PHASE_FACTORIZATION;
@@ -339,6 +374,17 @@ int CuDssBridge::factor (const double* vals) {
       myLastErr = "cudaStreamSynchronize failed after factor";
       return CUDSS_BRIDGE_ERR_FACTORIZATION;
    }
+   if (tm) {
+      double t1 = nowMs();
+      std::fprintf (stderr,
+         "[cudss-timing] %s n=%d nnz=%d: H2D vals=%.2fms %s=%.2fms total=%.2fms\n",
+         myFactored ? "refactor" : "factor",
+         myN, myNnz,
+         tCopyEnd - t0,
+         myFactored ? "REFACTOR" : "FACTOR",
+         t1 - tCopyEnd,
+         t1 - t0);
+   }
    myFactored    = true;
    myItDiagDirty = true;   // device values changed; diag cache invalid
    myLastErr     = nullptr;
@@ -350,18 +396,24 @@ int CuDssBridge::solve (const double* b, double* x) {
       myLastErr = "solve called before factor";
       return CUDSS_BRIDGE_ERR_STATE;
    }
+   const bool tm = timingEnabled();
+   const double t0 = tm ? nowMs() : 0;
    const size_t vecBytes = (size_t)myN * sizeof(double);
    if (!cudaOk (cudaMemcpyAsync (myBVecD, b, vecBytes,
                                  cudaMemcpyHostToDevice, myStream))) {
       myLastErr = "cudaMemcpyAsync failed copying RHS";
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
+   double tH2D = 0;
+   if (tm) { cudaStreamSynchronize (myStream); tH2D = nowMs(); }
    if (!dssOk (cudssExecute (myHandle, CUDSS_PHASE_SOLVE,
                              myConfig, myData,
                              myMatA, myMatX, myMatB))) {
       myLastErr = "CUDSS_PHASE_SOLVE failed";
       return CUDSS_BRIDGE_ERR_SOLVE;
    }
+   double tSolve = 0;
+   if (tm) { cudaStreamSynchronize (myStream); tSolve = nowMs(); }
    if (!cudaOk (cudaMemcpyAsync (x, myXVecD, vecBytes,
                                  cudaMemcpyDeviceToHost, myStream))) {
       myLastErr = "cudaMemcpyAsync failed copying solution";
@@ -370,6 +422,13 @@ int CuDssBridge::solve (const double* b, double* x) {
    if (!cudaOk (cudaStreamSynchronize (myStream))) {
       myLastErr = "cudaStreamSynchronize failed after solve";
       return CUDSS_BRIDGE_ERR_SOLVE;
+   }
+   if (tm) {
+      double t1 = nowMs();
+      std::fprintf (stderr,
+         "[cudss-timing] solve n=%d: H2D b=%.2fms SOLVE=%.2fms "
+         "D2H x=%.2fms total=%.2fms\n",
+         myN, tH2D - t0, tSolve - tH2D, t1 - tSolve, t1 - t0);
    }
    myLastErr = nullptr;
    return CUDSS_BRIDGE_OK;
@@ -633,6 +692,8 @@ int CuDssBridge::iterativeSolveBiCGStab (
       myLastErr = "iterativeSolve called before factor";
       return CUDSS_BRIDGE_ERR_STATE;
    }
+   const bool tm = timingEnabled();
+   const double tT0 = tm ? nowMs() : 0;
    int s = ensureIterativeState();
    if (s != CUDSS_BRIDGE_OK) return s;
 
@@ -916,6 +977,13 @@ int CuDssBridge::iterativeSolveBiCGStab (
       return CUDSS_BRIDGE_ERR_SOLVE;
    }
    if (outIters) *outIters = iter;
+   if (tm) {
+      double tT1 = nowMs();
+      double total = tT1 - tT0;
+      std::fprintf (stderr,
+         "[cudss-timing] bicgstab n=%d iters=%d: total=%.2fms (%.2fms/iter)\n",
+         myN, iter, total, total / std::max (1, iter));
+   }
    myLastErr = nullptr;
    return CUDSS_BRIDGE_OK;
 }

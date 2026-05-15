@@ -144,6 +144,11 @@ JNIEXPORT jstring JNICALL Java_maspack_solvers_CuDssSolver_doGetLastError
    return env->NewStringUTF (msg);
 }
 
+JNIEXPORT void JNICALL Java_maspack_solvers_CuDssSolver_doSetTimingEnabled
+  (JNIEnv* /*env*/, jclass /*cls*/, jboolean on) {
+   CuDssBridge::setTimingEnabled (on == JNI_TRUE);
+}
+
 JNIEXPORT jstring JNICALL Java_maspack_solvers_CuDssSolver_doGetVersion
   (JNIEnv* env, jclass /*cls*/) {
    int major = 0, minor = 0, patch = 0;
