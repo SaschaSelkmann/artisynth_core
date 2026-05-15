@@ -153,6 +153,13 @@ public class ArticulatedFemBig extends RootModel {
       myMechMod.setIntegrator (Integrator.ConstrainedBackwardEuler);
       myMechMod.setProfiling (true);  // emit avgSolveTime per step
       addModel (myMechMod);
+      // Enable MechSystemSolver's KKT-breakdown profiling. Triggered by
+      // CUDSS_BRIDGE_TIMING env var (same toggle the bridge reads), so
+      // a single "profile this run" gesture turns on both layers.
+      String dbg = System.getenv ("CUDSS_BRIDGE_TIMING");
+      if (dbg != null && !dbg.isEmpty() && !dbg.equals ("0")) {
+         myMechMod.getSolver().profileKKTSolveTime = true;
+      }
 
       System.out.println (
          "ArticulatedFemBig: nlinks=" + nlinks
