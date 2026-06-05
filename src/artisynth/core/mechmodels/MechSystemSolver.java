@@ -1532,6 +1532,7 @@ public class MechSystemSolver {
       MechSystem.GpuAssemblyContext directCrsContext =
          assembleDirectCrs ? getGpuAssemblyContext (vsize, vsize) : null;
       boolean directCrsMatrixReady = false;
+      boolean directCrsDeviceValuesReady = false;
       boolean crsVerified = false;
       double[] directCrsVelValues = null;
       VectorNd directCrsVelForces = null;
@@ -1563,6 +1564,7 @@ public class MechSystemSolver {
                }
                directCrsMatrixReady =
                   addActiveMassMatrixCrsValueContributions (directCrsContext);
+               directCrsDeviceValuesReady = directCrsMatrixReady;
                crsVerified = directCrsMatrixReady;
             }
          }
@@ -1690,7 +1692,7 @@ public class MechSystemSolver {
       if (vsize != 0) {
          if (myUseDirectSolver) {
             if (useDirectCrs) {
-               if (directCrsContext.numCrsValueContributions() > 0) {
+               if (directCrsDeviceValuesReady) {
                   CuDssSolver cudss = (CuDssSolver)myDirectSolver;
                   cudss.clearDeviceValues();
                   cudss.addDeviceValues (

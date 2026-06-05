@@ -2549,6 +2549,16 @@ TransformableGeometry, ScalableUnits {
          return true;
       }
 
+      public boolean assemblePosJacobianCrsValueContributions (
+         MechSystem.GpuAssemblyContext context, double s) {
+         return true;
+      }
+
+      public boolean assembleVelJacobianCrsValueContributions (
+         MechSystem.GpuAssemblyContext context, double s) {
+         return true;
+      }
+
       public int getJacobianType() {
          return Matrix.SPD;
       }
