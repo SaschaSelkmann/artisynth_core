@@ -595,6 +595,32 @@ public class FemModel3dTest extends UnitTest {
          "position Jacobian CRS assembly", context.getCrsValues(), M);
    }
 
+   private void testBackwardEulerDirectCrsSolve() {
+      if (!Boolean.getBoolean ("artisynth.gpuAssembly.directCrs")) {
+         return;
+      }
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         System.out.println (
+            "Skipping FEM direct CRS solve test: cuDSS is unavailable");
+         return;
+      }
+
+      FemModel3d fem =
+         FemFactory.createTetGrid (null, 1.0, 0.8, 0.6, 1, 1, 1);
+      fem.setMaterial (new LinearMaterial (10000, 0.33));
+      fem.setDensity (1000);
+      fem.setParticleDamping (0.25);
+      fem.setStiffnessDamping (0.1);
+
+      MechModel mech = new MechModel();
+      mech.setIntegrator (MechSystemSolver.Integrator.BackwardEuler);
+      mech.setMatrixSolver (maspack.solvers.SparseSolverId.CuDss);
+      mech.addModel (fem);
+
+      mech.preadvance (0, 0.001, /*flags=*/0);
+      mech.advance (0, 0.001, /*flags=*/0);
+   }
+
    void checkNumbering (FemModel3d fem, boolean zeroBased) {
       int inc = zeroBased ? 0 : 1;
       for (int i=0; i< fem.numNodes(); i++) {
@@ -661,6 +687,7 @@ public class FemModel3dTest extends UnitTest {
    public void test() {
       //testFrameRelativeMass();
       testFemNeighborCrsAssembly();
+      testBackwardEulerDirectCrsSolve();
       testFindNearestElement();
       testSetNumbering();
       testFemCopy();
