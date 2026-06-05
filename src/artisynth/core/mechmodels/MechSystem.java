@@ -553,6 +553,21 @@ public interface MechSystem {
    }
 
    /**
+    * Optionally assembles the scaled force-velocity Jacobian directly into the
+    * CRS values contained in {@code context}. This is intended for validation
+    * and future GPU/direct-CRS solve paths; the default implementation reports
+    * that direct CRS assembly is not available.
+    *
+    * @param context GPU assembly context containing CRS values and slot map
+    * @param h scale factor for the Jacobian
+    * @return {@code true} if the full system contribution was assembled
+    */
+   public default boolean assembleGpuVelJacobianCrsValues (
+      GpuAssemblyContext context, double h) {
+      return false;
+   }
+
+   /**
     * Adds the current force-position Jacobian, scaled by <code>h</code>, to
     * the matrix <code>S</code>, which should have been previously created with
     * a call to {@link #buildSolveMatrix buildSolveMatrix()}.  Addition
@@ -604,6 +619,21 @@ public interface MechSystem {
    public default boolean addGpuPosJacobian (
       GpuAssemblyContext context, VectorNd f, double h) {
       return addGpuPosJacobian (context.getMatrix(), f, h);
+   }
+
+   /**
+    * Optionally assembles the scaled force-position Jacobian directly into the
+    * CRS values contained in {@code context}. This is intended for validation
+    * and future GPU/direct-CRS solve paths; the default implementation reports
+    * that direct CRS assembly is not available.
+    *
+    * @param context GPU assembly context containing CRS values and slot map
+    * @param h scale factor for the Jacobian
+    * @return {@code true} if the full system contribution was assembled
+    */
+   public default boolean assembleGpuPosJacobianCrsValues (
+      GpuAssemblyContext context, double h) {
+      return false;
    }
 
    /**

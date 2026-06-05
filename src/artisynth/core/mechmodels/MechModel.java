@@ -2539,6 +2539,16 @@ TransformableGeometry, ScalableUnits {
          // nothing needed
       }
 
+      public boolean assemblePosJacobianCrsValues (
+         MechSystem.GpuAssemblyContext context, double s) {
+         return true;
+      }
+
+      public boolean assembleVelJacobianCrsValues (
+         MechSystem.GpuAssemblyContext context, double s) {
+         return true;
+      }
+
       public int getJacobianType() {
          return Matrix.SPD;
       }
@@ -2960,4 +2970,3 @@ TransformableGeometry, ScalableUnits {
    }
 
 }
-

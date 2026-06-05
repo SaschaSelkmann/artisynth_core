@@ -81,6 +81,8 @@ public class MechSystemSolver {
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
    private static final boolean enableGpuAssembly =
       Boolean.getBoolean ("artisynth.gpuAssembly.enabled");
+   private static final boolean verifyGpuAssemblyCrs =
+      Boolean.getBoolean ("artisynth.gpuAssembly.verifyCrs");
    public boolean printChecksums = false;
    public boolean printPosChecksum = false;
    public boolean printVelChecksum = false;
@@ -99,6 +101,7 @@ public class MechSystemSolver {
    private boolean myUpdateForcesAtStepEnd = false;
    private boolean computeKKTResidual = false;
    private boolean myWarnedGpuAssemblyFallback = false;
+   private boolean myWarnedGpuAssemblyCrsVerifyIncomplete = false;
    private int myGpuAssemblyContextVersion = -1;
    private MechSystem.GpuAssemblyContext myGpuAssemblyContext = null;
 
@@ -1163,6 +1166,80 @@ public class MechSystemSolver {
       return assembled;
    }
 
+   private void maybeWarnGpuAssemblyCrsVerifyIncomplete (String phase) {
+      if (!myWarnedGpuAssemblyCrsVerifyIncomplete) {
+         System.out.println (
+            "MechSystemSolver: GPU assembly CRS verification requested for "+
+            phase+" but not all contributions provide direct CRS assembly; "+
+            "skipping CRS comparison.");
+         myWarnedGpuAssemblyCrsVerifyIncomplete = true;
+      }
+   }
+
+   private void checkGpuAssemblyCrsValues (String phase) {
+      MechSystem.GpuAssemblyContext context = getGpuAssemblyContext();
+      double[] vals = context.getCrsValues();
+      double[] chk = new double[vals.length];
+      mySolveMatrix.getCRSValues (
+         chk, Matrix.Partition.Full, context.getSlotMap().rowSize(),
+         context.getSlotMap().colSize());
+      double max = 0;
+      int maxIdx = -1;
+      for (int i=0; i<vals.length; i++) {
+         double err = Math.abs (vals[i]-chk[i]);
+         if (err > max) {
+            max = err;
+            maxIdx = i;
+         }
+      }
+      double ref = 0;
+      for (int i=0; i<chk.length; i++) {
+         ref = Math.max (ref, Math.abs (chk[i]));
+      }
+      double tol = Math.max (1e-12, 1e-12*ref);
+      if (max > tol) {
+         throw new InternalErrorException (
+            "GPU assembly CRS verification failed for "+phase+
+            ": max error "+max+" at CRS value "+maxIdx+
+            " (tol="+tol+", gpu="+vals[maxIdx]+", cpu="+chk[maxIdx]+")");
+      }
+   }
+
+   private boolean verifyGpuVelJacobianCrs (double h, String phase) {
+      if (!verifyGpuAssemblyCrs || !enableGpuAssembly) {
+         return false;
+      }
+      MechSystem.GpuAssemblyContext context = getGpuAssemblyContext();
+      context.clearCrsValues();
+      boolean complete = mySys.assembleGpuVelJacobianCrsValues (context, h);
+      if (complete) {
+         checkGpuAssemblyCrsValues (phase);
+      }
+      else {
+         maybeWarnGpuAssemblyCrsVerifyIncomplete (phase);
+      }
+      return complete;
+   }
+
+   private boolean verifyGpuPosJacobianCrs (
+      double h, String phase, boolean cumulative) {
+      if (!verifyGpuAssemblyCrs || !enableGpuAssembly) {
+         return false;
+      }
+      MechSystem.GpuAssemblyContext context = getGpuAssemblyContext();
+      if (!cumulative) {
+         context.clearCrsValues();
+      }
+      boolean complete = mySys.assembleGpuPosJacobianCrsValues (context, h);
+      if (complete) {
+         checkGpuAssemblyCrsValues (phase);
+      }
+      else {
+         maybeWarnGpuAssemblyCrsVerifyIncomplete (phase);
+      }
+      return complete;
+   }
+
    // begin timing code for the solver
    FunctionTimer factorTimer = new FunctionTimer();
    FunctionTimer solveTimer = new FunctionTimer();
@@ -1261,6 +1338,8 @@ public class MechSystemSolver {
       if (!gpuVel) {
          mySys.addVelJacobian (mySolveMatrix, myC, -h);
       }
+      boolean crsVerified = verifyGpuVelJacobianCrs (
+         -h, "backwardEuler velocity Jacobian");
       long tVelJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
          myB.scaledAdd (h, myC);
@@ -1279,6 +1358,10 @@ public class MechSystemSolver {
          mySolveMatrix, myC, -h * h, "backwardEuler position Jacobian");
       if (!gpuPos) {
          mySys.addPosJacobian (mySolveMatrix, myC, -h * h);
+      }
+      if (crsVerified) {
+         crsVerified = verifyGpuPosJacobianCrs (
+            -h * h, "backwardEuler position Jacobian", /*cumulative=*/true);
       }
       long tPosJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
@@ -1793,6 +1876,7 @@ public class MechSystemSolver {
       long tPosJac = tZero;
       boolean gpuVel = false;
       boolean gpuPos = false;
+      boolean crsVerified = false;
 
       if (a0 != 0 && a1 != 0) {
          // add implicit integration terms
@@ -1803,6 +1887,8 @@ public class MechSystemSolver {
          if (!gpuVel) {
             mySys.addVelJacobian (S, myC, a0);
          }
+         crsVerified = verifyGpuVelJacobianCrs (
+            a0, "KKT velocity Jacobian");
          tVelJac = profileGpuAssembly ? System.nanoTime() : tVelJac;
          if (useFictitousJacobianForces) {
             bf.scaledAdd (-a0, myC);
@@ -1820,6 +1906,10 @@ public class MechSystemSolver {
          gpuPos = addGpuPosJacobian (S, myC, a1, "KKT position Jacobian");
          if (!gpuPos) {
             mySys.addPosJacobian (S, myC, a1);
+         }
+         if (crsVerified) {
+            crsVerified = verifyGpuPosJacobianCrs (
+               a1, "KKT position Jacobian", /*cumulative=*/true);
          }
          tPosJac = profileGpuAssembly ? System.nanoTime() : tPosJac;
 

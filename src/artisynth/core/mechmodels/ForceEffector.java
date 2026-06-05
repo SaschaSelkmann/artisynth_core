@@ -73,6 +73,34 @@ public interface ForceEffector {
    public void addVelJacobian (SparseNumberedBlockMatrix M, double s);
 
    /**
+    * Optionally assembles the scaled position Jacobian directly into CRS values
+    * supplied by a GPU assembly context. The default implementation reports
+    * that this effector does not support direct CRS assembly.
+    *
+    * @param context GPU assembly context containing CRS values and slot map
+    * @param s scaling factor for position Jacobian
+    * @return {@code true} if the contribution was fully assembled
+    */
+   public default boolean assemblePosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return false;
+   }
+
+   /**
+    * Optionally assembles the scaled velocity Jacobian directly into CRS values
+    * supplied by a GPU assembly context. The default implementation reports
+    * that this effector does not support direct CRS assembly.
+    *
+    * @param context GPU assembly context containing CRS values and slot map
+    * @param s scaling factor for velocity Jacobian
+    * @return {@code true} if the contribution was fully assembled
+    */
+   public default boolean assembleVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return false;
+   }
+
+   /**
     * Returns a code indicating the matrix type that results when the Jacobian
     * terms of this force effector are added to the solve matrix. This should be
     * a logical or-ing of either {@link maspack.matrix.Matrix#SYMMETRIC

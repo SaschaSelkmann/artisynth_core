@@ -4121,6 +4121,13 @@ PointAttachable, ConnectableBody {
          context.getCrsValues(), context.getSlotMap(), s);
    }
 
+   public boolean assembleVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      addVelJacobianCrsValues (context, s);
+      return true;
+   }
+
    public void addPosJacobian(
       SparseNumberedBlockMatrix M, double s) {
 
@@ -4175,6 +4182,13 @@ PointAttachable, ConnectableBody {
 
       addPosJacobianCrsValues (
          context.getCrsValues(), context.getSlotMap(), s);
+   }
+
+   public boolean assemblePosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      addPosJacobianCrsValues (context, s);
+      return true;
    }
 
    protected double checkMatrixStability(DenseMatrix D) {

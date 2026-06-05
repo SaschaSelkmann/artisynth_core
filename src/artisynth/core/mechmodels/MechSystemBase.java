@@ -2396,6 +2396,56 @@ public abstract class MechSystemBase extends RenderableModelBase
       addAttachmentJacobian(S, f);
    }    
 
+   private boolean hasAttachmentJacobianContributions() {
+      return myAttachments != null && myAttachments.size() > 0;
+   }
+
+   public boolean assembleGpuPosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      updateDynamicComponentLists();
+      updateForceComponentList();
+      if (!checkMatrixSize (context.getMatrix())) {
+         throw new IllegalArgumentException (
+            "context matrix improperly sized; perhaps not created with "+
+            "buildSolveMatrix()?");
+      }
+      boolean complete = true;
+      for (int i=0; i<myForceEffectors.size(); i++) {
+         if (!myForceEffectors.get(i).assemblePosJacobianCrsValues (
+                context, s)) {
+            complete = false;
+         }
+      }
+      if (hasAttachmentJacobianContributions()) {
+         complete = false;
+      }
+      return complete;
+   }
+
+   public boolean assembleGpuVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      updateDynamicComponentLists();
+      updateForceComponentList();
+      if (!checkMatrixSize (context.getMatrix())) {
+         throw new IllegalArgumentException (
+            "context matrix improperly sized; perhaps not created with "+
+            "buildSolveMatrix()?");
+      }
+      boolean complete = true;
+      for (int i=0; i<myForceEffectors.size(); i++) {
+         if (!myForceEffectors.get(i).assembleVelJacobianCrsValues (
+                context, s)) {
+            complete = false;
+         }
+      }
+      if (hasAttachmentJacobianContributions()) {
+         complete = false;
+      }
+      return complete;
+   }
+
    public void addGeneralMassBlocks (SparseNumberedBlockMatrix M) {
       // do nothing if mass matrix is block diagonal
    }
