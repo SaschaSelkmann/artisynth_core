@@ -27,6 +27,12 @@ inline double nowMs() {
 
 } // anon
 
+extern "C" void zeroValues_launch (
+   int nnz, double* vals, cudaStream_t stream);
+extern "C" void scatterAddValues_launch (
+   int nvals, const int* slots, const double* addVals,
+   double scale, double* crsVals, cudaStream_t stream);
+
 void CuDssBridge::setTimingEnabled (bool on) {
    g_timing = on;
    g_timing_initialized = true;
@@ -401,6 +407,106 @@ int CuDssBridge::factor (const double* vals) {
    }
    myFactored    = true;
    myItDiagDirty = true;   // device values changed; diag cache invalid
+   myLastErr     = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
+int CuDssBridge::clearDeviceValues() {
+   if (!myHasPattern || !myValsD) {
+      myLastErr = "clearDeviceValues called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   zeroValues_launch (myNnz, myValsD, myStream);
+   if (!cudaOk (cudaGetLastError())) {
+      myLastErr = "zeroValues kernel launch failed";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   myItDiagDirty = true;
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
+int CuDssBridge::addDeviceValues (
+   const int* slots, const double* addVals, int nvals, double scale) {
+
+   if (!myHasPattern || !myValsD) {
+      myLastErr = "addDeviceValues called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nvals < 0) {
+      myLastErr = "addDeviceValues received a negative value count";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nvals == 0) {
+      myLastErr = nullptr;
+      return CUDSS_BRIDGE_OK;
+   }
+
+   int* slotsD = nullptr;
+   double* addValsD = nullptr;
+   const size_t slotBytes = (size_t)nvals * sizeof(int);
+   const size_t valBytes = (size_t)nvals * sizeof(double);
+   if (!cudaOk (cudaMalloc (&slotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&addValsD, valBytes))) {
+      if (slotsD) cudaFree (slotsD);
+      if (addValsD) cudaFree (addValsD);
+      myLastErr = "cudaMalloc failed in addDeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_ALLOC;
+   }
+   if (!cudaOk (cudaMemcpyAsync (
+          slotsD, slots, slotBytes, cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          addValsD, addVals, valBytes, cudaMemcpyHostToDevice, myStream))) {
+      cudaFree (slotsD);
+      cudaFree (addValsD);
+      myLastErr = "cudaMemcpyAsync failed in addDeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   scatterAddValues_launch (
+      nvals, slotsD, addValsD, scale, myValsD, myStream);
+   cudaError_t launchErr = cudaGetLastError();
+   cudaFree (slotsD);
+   cudaFree (addValsD);
+   if (!cudaOk (launchErr)) {
+      myLastErr = "scatterAddValues kernel launch failed";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   myItDiagDirty = true;
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
+int CuDssBridge::factorDeviceValues() {
+   if (!myAnalyzed) {
+      myLastErr = "factorDeviceValues called before analyze";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   const bool tm = timingEnabled();
+   const double t0 = tm ? nowMs() : 0;
+   const cudssPhase_t phase = myFactored ? CUDSS_PHASE_REFACTORIZATION
+                                         : CUDSS_PHASE_FACTORIZATION;
+   if (!dssOk (cudssExecute (myHandle, phase, myConfig, myData,
+                             myMatA, myMatX, myMatB))) {
+      myLastErr = (phase == CUDSS_PHASE_REFACTORIZATION)
+                  ? "CUDSS_PHASE_REFACTORIZATION failed"
+                  : "CUDSS_PHASE_FACTORIZATION failed";
+      return CUDSS_BRIDGE_ERR_FACTORIZATION;
+   }
+   if (!cudaOk (cudaStreamSynchronize (myStream))) {
+      myLastErr = "cudaStreamSynchronize failed after factorDeviceValues";
+      return CUDSS_BRIDGE_ERR_FACTORIZATION;
+   }
+   if (tm) {
+      double t1 = nowMs();
+      std::fprintf (stderr,
+         "[cudss-timing] %s-device n=%d nnz=%d: %s=%.2fms total=%.2fms\n",
+         myFactored ? "refactor" : "factor",
+         myN, myNnz,
+         myFactored ? "REFACTOR" : "FACTOR",
+         t1 - t0, t1 - t0);
+   }
+   myFactored    = true;
+   myItDiagDirty = true;
    myLastErr     = nullptr;
    return CUDSS_BRIDGE_OK;
 }

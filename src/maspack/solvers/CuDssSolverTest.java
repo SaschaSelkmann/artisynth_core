@@ -367,6 +367,35 @@ public class CuDssSolverTest extends UnitTest {
       finally { s.dispose(); }
    }
 
+   private void testDeviceValueAssembly() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         s.analyze (SPD5_VALS, SPD5_COL_IDXS_0, SPD5_ROW_OFFS_0, 5, Matrix.SPD);
+         int[] slots = new int[SPD5_VALS.length];
+         double[] halfVals = new double[SPD5_VALS.length];
+         for (int i=0; i<SPD5_VALS.length; i++) {
+            slots[i] = i;
+            halfVals[i] = 0.5*SPD5_VALS[i];
+         }
+
+         s.clearDeviceValues();
+         s.addDeviceValues (slots, halfVals, halfVals.length, 1.0);
+         s.addDeviceValues (slots, halfVals, halfVals.length, 1.0);
+         s.factorDeviceValues();
+
+         double[] x = new double[5];
+         s.solve (x, SPD5_RHS);
+         for (int i=0; i<5; i++) {
+            if (Math.abs (x[i] - SPD5_EXPECTED[i]) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "device value assembly x[" + i + "]=" + x[i] +
+                  " expected " + SPD5_EXPECTED[i]);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
    // Refactor with same pattern via array entry points.
    private void testArrayCsrRefactor() {
       CuDssSolver s = new CuDssSolver();
@@ -577,6 +606,7 @@ public class CuDssSolverTest extends UnitTest {
 
       // Stage B additions
       testArrayCsrSpdRoundtrip();
+      testDeviceValueAssembly();
       testArrayCsrRefactor();
       testMultiRhsConsistency();
       testMultiRhsGrowShrink();

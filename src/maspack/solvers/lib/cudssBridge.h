@@ -80,6 +80,16 @@ public:
    // the same pattern). vals[] length must equal nnz from setPattern.
    int factor (const double* vals);
 
+   // Device-side numeric assembly support. clearDeviceValues() zeros the
+   // persistent CSR values buffer. addDeviceValues() performs
+   // valsD[slots[i]] += scale * addVals[i] on the CUDA stream. After device
+   // assembly, factorDeviceValues() factors the current device values without
+   // copying a host CRS value array.
+   int clearDeviceValues();
+   int addDeviceValues (
+      const int* slots, const double* addVals, int nvals, double scale);
+   int factorDeviceValues();
+
    // Copy b[] H->D, run CUDSS_PHASE_SOLVE, copy x[] D->H. Both arrays length n.
    int solve (const double* b, double* x);
 

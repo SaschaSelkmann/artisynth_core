@@ -52,3 +52,41 @@ extern "C" void extractDiag_launch (
    extractDiagKernel<<<blocks, threads, 0, stream>>>(
       n, rowOffs, colIdxs, vals, diag);
 }
+
+// vals[i] = 0 for all CRS entries.
+__global__ static void zeroValuesKernel (
+   int nnz, double* __restrict__ vals) {
+   int i = blockIdx.x * blockDim.x + threadIdx.x;
+   if (i < nnz) {
+      vals[i] = 0.0;
+   }
+}
+
+extern "C" void zeroValues_launch (
+   int nnz, double* vals, cudaStream_t stream) {
+   const int threads = 256;
+   const int blocks  = (nnz + threads - 1) / threads;
+   zeroValuesKernel<<<blocks, threads, 0, stream>>> (nnz, vals);
+}
+
+// crsVals[slots[i]] += scale * addVals[i].
+__global__ static void scatterAddValuesKernel (
+   int nvals,
+   const int*    __restrict__ slots,
+   const double* __restrict__ addVals,
+   double scale,
+   double*       __restrict__ crsVals) {
+   int i = blockIdx.x * blockDim.x + threadIdx.x;
+   if (i < nvals) {
+      atomicAdd (&crsVals[slots[i]], scale * addVals[i]);
+   }
+}
+
+extern "C" void scatterAddValues_launch (
+   int nvals, const int* slots, const double* addVals,
+   double scale, double* crsVals, cudaStream_t stream) {
+   const int threads = 256;
+   const int blocks  = (nvals + threads - 1) / threads;
+   scatterAddValuesKernel<<<blocks, threads, 0, stream>>>(
+      nvals, slots, addVals, scale, crsVals);
+}

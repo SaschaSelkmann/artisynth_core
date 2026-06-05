@@ -63,6 +63,39 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactor
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doClearDeviceValues
+  (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   return (jint)b->clearDeviceValues();
+}
+
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddDeviceValues
+  (JNIEnv* env, jclass /*cls*/, jlong handle,
+   jintArray slots, jdoubleArray vals, jint nvals, jdouble scale) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   jint* slotsP = env->GetIntArrayElements (slots, nullptr);
+   jdouble* valsP = env->GetDoubleArrayElements (vals, nullptr);
+   if (!slotsP || !valsP) {
+      if (slotsP) env->ReleaseIntArrayElements (slots, slotsP, JNI_ABORT);
+      if (valsP) env->ReleaseDoubleArrayElements (vals, valsP, JNI_ABORT);
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = b->addDeviceValues (
+      (const int*)slotsP, (const double*)valsP, (int)nvals, (double)scale);
+   env->ReleaseIntArrayElements (slots, slotsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (vals, valsP, JNI_ABORT);
+   return (jint)status;
+}
+
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactorDeviceValues
+  (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   return (jint)b->factorDeviceValues();
+}
+
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolve
   (JNIEnv* env, jclass /*cls*/, jlong handle, jdoubleArray b, jdoubleArray x) {
    CuDssBridge* br = asBridge (handle);

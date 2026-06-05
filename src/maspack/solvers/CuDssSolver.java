@@ -87,6 +87,10 @@ public class CuDssSolver implements DirectSolver {
       long handle, int n, int nnz, int[] rowOffs, int[] colIdxs, int mtype);
    private static native int    doAnalyze (long handle);
    private static native int    doFactor  (long handle, double[] vals);
+   private static native int    doClearDeviceValues (long handle);
+   private static native int    doAddDeviceValues (
+      long handle, int[] slots, double[] vals, int nvals, double scale);
+   private static native int    doFactorDeviceValues (long handle);
    private static native int    doSolve   (long handle, double[] b, double[] x);
    private static native int    doSolveMulti (
       long handle, int nrhs, double[] B, double[] X);
@@ -364,6 +368,54 @@ public class CuDssSolver implements DirectSolver {
          throw new ImproperStateException ("analyze() not previously called");
       }
       check (doFactor (myHandle, vals), "factor");
+      myState = FACTORED;
+   }
+
+   /**
+    * Clears the native device-side CRS value buffer associated with the last
+    * {@link #analyze} call.
+    */
+   public synchronized void clearDeviceValues() {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      check (doClearDeviceValues (myHandle), "clearDeviceValues");
+   }
+
+   /**
+    * Adds values into the native device-side CRS value buffer using slot
+    * indices:
+    * <pre>
+    *   deviceCrsValues[slots[i]] += scale * vals[i]
+    * </pre>
+    *
+    * <p>Slots are 0-based positions in the CRS value array for the currently
+    * analyzed sparsity pattern.
+    */
+   public synchronized void addDeviceValues (
+      int[] slots, double[] vals, int nvals, double scale) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      if (nvals < 0 || nvals > slots.length || nvals > vals.length) {
+         throw new IllegalArgumentException (
+            "nvals exceeds slot/value array length");
+      }
+      check (
+         doAddDeviceValues (myHandle, slots, vals, nvals, scale),
+         "addDeviceValues");
+   }
+
+   /**
+    * Factors the current native device-side CRS value buffer. This avoids
+    * copying a host CRS value array into cuDSS and is intended for GPU-side
+    * assembly paths that populate the device buffer directly.
+    */
+   public synchronized void factorDeviceValues() {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      check (doFactorDeviceValues (myHandle), "factorDeviceValues");
       myState = FACTORED;
    }
 

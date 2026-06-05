@@ -59,6 +59,30 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactor
 
 /*
  * Class:     maspack_solvers_CuDssSolver
+ * Method:    doClearDeviceValues
+ * Signature: (J)I
+ */
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doClearDeviceValues
+  (JNIEnv *, jclass, jlong);
+
+/*
+ * Class:     maspack_solvers_CuDssSolver
+ * Method:    doAddDeviceValues
+ * Signature: (J[I[DID)I
+ */
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddDeviceValues
+  (JNIEnv *, jclass, jlong, jintArray, jdoubleArray, jint, jdouble);
+
+/*
+ * Class:     maspack_solvers_CuDssSolver
+ * Method:    doFactorDeviceValues
+ * Signature: (J)I
+ */
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactorDeviceValues
+  (JNIEnv *, jclass, jlong);
+
+/*
+ * Class:     maspack_solvers_CuDssSolver
  * Method:    doSolve
  * Signature: (J[D[D)I
  */
