@@ -303,7 +303,7 @@ int CuDssBridge::setPattern (int n, int nnz,
           &myMatA, n, n, nnz,
           myRowOffsD, /*rowEnd*/ nullptr,
           myColIdxsD, myValsD,
-          CUDA_R_32I, CUDA_R_64F,
+          CUDSS_R_32I, CUDSS_R_32I, CUDSS_R_64F,
           mtype, mview, CUDSS_BASE_ZERO))) {
       myLastErr = "cudssMatrixCreateCsr failed";
       return CUDSS_BRIDGE_ERR_CUDSS_DESCRIPTOR;
@@ -311,14 +311,14 @@ int CuDssBridge::setPattern (int n, int nnz,
    myMatADesc = true;
 
    if (!dssOk (cudssMatrixCreateDn (
-          &myMatX, n, 1, n, myXVecD, CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
+          &myMatX, n, 1, n, myXVecD, CUDSS_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
       myLastErr = "cudssMatrixCreateDn failed (x)";
       return CUDSS_BRIDGE_ERR_CUDSS_DESCRIPTOR;
    }
    myMatXDesc = true;
 
    if (!dssOk (cudssMatrixCreateDn (
-          &myMatB, n, 1, n, myBVecD, CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
+          &myMatB, n, 1, n, myBVecD, CUDSS_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
       myLastErr = "cudssMatrixCreateDn failed (b)";
       return CUDSS_BRIDGE_ERR_CUDSS_DESCRIPTOR;
    }
@@ -482,14 +482,14 @@ int CuDssBridge::solveMulti (int nrhs, const double* B, double* X) {
 
    if (!dssOk (cudssMatrixCreateDn (
           &myMatBMulti, myN, nrhs, myN, myBMatD,
-          CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
+          CUDSS_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
       myLastErr = "cudssMatrixCreateDn failed for multi-RHS B";
       return CUDSS_BRIDGE_ERR_CUDSS_DESCRIPTOR;
    }
    myMatBMultiDesc = true;
    if (!dssOk (cudssMatrixCreateDn (
           &myMatXMulti, myN, nrhs, myN, myXMatD,
-          CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
+          CUDSS_R_64F, CUDSS_LAYOUT_COL_MAJOR))) {
       myLastErr = "cudssMatrixCreateDn failed for multi-RHS X";
       return CUDSS_BRIDGE_ERR_CUDSS_DESCRIPTOR;
    }

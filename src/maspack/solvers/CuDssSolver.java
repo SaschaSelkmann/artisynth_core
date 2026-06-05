@@ -64,8 +64,8 @@ public class CuDssSolver implements DirectSolver {
    private static final int ERR_CANT_LOAD_LIBRARIES   = -1;
 
    // Native library name. NativeLibraryManager resolves this to
-   // lib/Linux64/libCuDssJNI.so.0.7.1 (mirroring PardisoJNI's pattern).
-   static String nativeLibrary = "CuDssJNI.0.7.1";
+   // lib/Linux64/libCuDssJNI.so.0.8.0 (mirroring PardisoJNI's pattern).
+   static String nativeLibrary = "CuDssJNI.0.8.0";
 
    private static int myInitStatus = INIT_UNKNOWN;
    private static String myInitErrMsg;
@@ -165,7 +165,7 @@ public class CuDssSolver implements DirectSolver {
    }
 
    /**
-    * Returns the cuDSS runtime version (e.g. "0.7.1"), or {@code null} if
+    * Returns the cuDSS runtime version (e.g. "0.8.0"), or {@code null} if
     * the native library is unavailable.
     */
    public static String getCuDssVersion() {
@@ -242,6 +242,17 @@ public class CuDssSolver implements DirectSolver {
             "cuDSS " + op + " failed (status " + status + ")"
             + (detail != null ? ": " + detail : ""));
       }
+   }
+
+   /**
+    * Returns the most recent native cuDSS bridge error for this solver, or
+    * {@code null} if the last native operation succeeded.
+    */
+   public synchronized String getLastErrorMessage() {
+      if (myHandle == 0L) {
+         return null;
+      }
+      return doGetLastError (myHandle);
    }
 
    @Override

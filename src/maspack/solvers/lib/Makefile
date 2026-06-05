@@ -232,7 +232,7 @@ pardiso:	$(LIB_TARGET_DIR)/$(PARDISO_MKL_TARGET)
 #
 # CuDssJNI version tracks the cuDSS release we link against.
 # ------------------------------------------------------------------
-CUDSS_VERSION ?= 0.7.1
+CUDSS_VERSION ?= 0.8.0
 CUDA_HOME     ?= /usr/local/cuda
 CUDSS_INC     ?= /usr/include/libcudss/12
 CUDSS_LIB     ?= /usr/lib/x86_64-linux-gnu/libcudss/12
@@ -255,7 +255,14 @@ CUDSS_LDS      = -L$(CUDSS_LIB) -lcudss \
                  -Wl,-rpath,$(CUDSS_LIB) \
                  -Wl,-rpath,$(CUDA_HOME)/lib64
 NVCC           = $(CUDA_HOME)/bin/nvcc
-NVCC_FLAGS     = -O2 -Xcompiler -fPIC -std=c++17
+NVCC_ARCH_FLAGS ?= \
+                 -gencode arch=compute_70,code=sm_70 \
+                 -gencode arch=compute_75,code=sm_75 \
+                 -gencode arch=compute_80,code=sm_80 \
+                 -gencode arch=compute_86,code=sm_86 \
+                 -gencode arch=compute_89,code=sm_89 \
+                 -gencode arch=compute_90,code=compute_90
+NVCC_FLAGS     = -O2 -Xcompiler -fPIC -std=c++17 $(NVCC_ARCH_FLAGS)
 
 # Regenerate the JNI header from CuDssSolver.java whenever the .java file
 # is newer than the .h. Uses `javac -h` since javah was removed in JDK 10.

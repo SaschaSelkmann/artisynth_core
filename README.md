@@ -93,7 +93,7 @@ accelerates.
 
 - NVIDIA GPU with compute capability >= 7.0 (Volta or newer).
 - CUDA 12 toolkit (`nvcc`, `cuda_runtime.h`).
-- NVIDIA cuDSS 0.7.x for CUDA 12 (`libcudss.so`, `cudss.h`).
+- NVIDIA cuDSS 0.8.x for CUDA 12 (`libcudss.so`, `cudss.h`).
 - cuSPARSE and cuBLAS (ship with the CUDA toolkit).
 - `gcc` / `g++` to build the JNI bridge.
 - Same Java toolchain as the regular ArtiSynth build.
@@ -145,9 +145,9 @@ cd src/maspack/solvers/lib
 make cudss
 ```
 
-This produces `lib/Linux64/libCuDssJNI.so.0.7.1`. Successful build
+This produces `lib/Linux64/libCuDssJNI.so.0.8.0`. Successful build
 links against `libcudss.so.0`, `libcudart.so.12`, `libcusparse.so.12`,
-and `libcublas.so.12` (verify with `ldd lib/Linux64/libCuDssJNI.so.0.7.1`).
+and `libcublas.so.12` (verify with `ldd lib/Linux64/libCuDssJNI.so.0.8.0`).
 
 Environment variable overrides for non-default installation paths:
 
@@ -159,7 +159,7 @@ Environment variable overrides for non-default installation paths:
 
 #### Running ArtiSynth with cuDSS
 
-Once `lib/Linux64/libCuDssJNI.so.0.7.1` exists, select cuDSS via the
+Once `lib/Linux64/libCuDssJNI.so.0.8.0` exists, select cuDSS via the
 `-matrixSolver` CLI option:
 
 ```bash

@@ -667,7 +667,8 @@ public class CuDssSolverTest extends UnitTest {
             SPD5_VALS, x2, b2, /*tolExp=*/10);
          if (iters <= 0) {
             throw new TestException (
-               "iterativeSolve returned " + iters + " (expected positive)");
+               "iterativeSolve returned " + iters + " (expected positive)"
+               + ", native error=" + s.getLastErrorMessage());
          }
          // Verify residual.
          double[] Ax = new double[5];
