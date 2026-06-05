@@ -192,6 +192,36 @@ public class FemNodeNeighbor {
       blk.m22 += d;
    }
 
+   private static void addScaledMatrixToCrs (
+      double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      int blkNum, double s, Matrix3d K) {
+
+      if (blkNum == -1 || K == null || s == 0) {
+         return;
+      }
+      vals[slotMap.getBlockSlot (blkNum, 0)] += s*K.m00;
+      vals[slotMap.getBlockSlot (blkNum, 1)] += s*K.m01;
+      vals[slotMap.getBlockSlot (blkNum, 2)] += s*K.m02;
+      vals[slotMap.getBlockSlot (blkNum, 3)] += s*K.m10;
+      vals[slotMap.getBlockSlot (blkNum, 4)] += s*K.m11;
+      vals[slotMap.getBlockSlot (blkNum, 5)] += s*K.m12;
+      vals[slotMap.getBlockSlot (blkNum, 6)] += s*K.m20;
+      vals[slotMap.getBlockSlot (blkNum, 7)] += s*K.m21;
+      vals[slotMap.getBlockSlot (blkNum, 8)] += s*K.m22;
+   }
+
+   private static void addMassDampingToCrs (
+      double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      int blkNum, double d) {
+
+      if (blkNum == -1 || d == 0) {
+         return;
+      }
+      vals[slotMap.getBlockSlot (blkNum, 0)] += d;
+      vals[slotMap.getBlockSlot (blkNum, 4)] += d;
+      vals[slotMap.getBlockSlot (blkNum, 8)] += d;
+   }
+
    public void addVelJacobian (
       SparseNumberedBlockMatrix S, FemNode3d node, double sm, double sk, 
       boolean useConsistentMass) {
@@ -225,6 +255,30 @@ public class FemNodeNeighbor {
       }
    }
 
+   public void addVelJacobian (
+      double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      FemNode3d node, double sm, double sk, boolean useConsistentMass) {
+
+      if (myBlkNum != -1) {
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum, sk, myK00);
+         if (useConsistentMass && myNode.isActiveLocal()) {
+            addMassDampingToCrs (vals, slotMap, myBlkNum, sm*myMass00);
+         }
+         else if (node == myNode && myNode.isActiveLocal()) {
+            addMassDampingToCrs (vals, slotMap, myBlkNum, sm*myNode.getMass());
+         }
+      }
+      if (myBlkNum01 != -1) {
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum01, sk, myK01);
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum10, sk, myK10);
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum11, sk, myK11);
+         if (node == myNode && node.isActiveLocal()) {
+            addMassDampingToCrs (
+               vals, slotMap, myBlkNum11, sm*myNode.getBackNode().getMass());
+         }
+      }
+   }
+
    public void addPosJacobian (
       SparseNumberedBlockMatrix S, FemNode3d node, double s) {
     
@@ -248,6 +302,21 @@ public class FemNodeNeighbor {
             blk = (Matrix3x3Block)S.getBlockByNumber(myBlkNum11);
             blk.scaledAdd (s, myK11, blk);
          }
+      }
+   }
+
+   public void addPosJacobian (
+      double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      FemNode3d node, double s) {
+
+      if (myBlkNum != -1) {
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum, s, myK00);
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum, s, myKX);
+      }
+      if (myBlkNum01 != -1) {
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum01, s, myK01);
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum10, s, myK10);
+         addScaledMatrixToCrs (vals, slotMap, myBlkNum11, s, myK11);
       }
    }
 

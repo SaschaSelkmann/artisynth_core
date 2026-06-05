@@ -542,6 +542,97 @@ public class FemModel3dTest extends UnitTest {
       testFindElem (fem, VOLUME, 9.0,-0.5, 9.0,   1.0,-0.5, 1.0, VOLUME, 5);
    }
 
+   private void checkCrsValuesEqual (
+      String msg, double[] vals, SparseNumberedBlockMatrix M) {
+
+      double[] chk = new double[M.numNonZeroVals()];
+      M.getCRSValues (chk, Matrix.Partition.Full, M.rowSize(), M.colSize());
+      if (vals.length != chk.length) {
+         throw new TestException (
+            msg+": CRS value array length "+vals.length+
+            ", expected "+chk.length);
+      }
+      for (int i=0; i<vals.length; i++) {
+         if (vals[i] != chk[i]) {
+            throw new TestException (
+               msg+": CRS value "+i+" is "+vals[i]+", expected "+chk[i]);
+         }
+      }
+   }
+
+   private void addVelJacobianCrsValues (
+      FemModel3d fem, double[] vals,
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap, double s) {
+
+      if (!fem.myStressesValidP || !fem.myStiffnessesValidP) {
+         fem.updateStressAndStiffness();
+      }
+      double sm = -s*fem.myMassDamping;
+      double sk = -s*fem.myStiffnessDamping;
+      for (int i=0; i<fem.myNodes.size(); i++) {
+         FemNode3d node = fem.myNodes.get(i);
+         if (node.getLocalSolveIndex() != -1) {
+            for (FemNodeNeighbor nbr : fem.getNodeNeighbors(node)) {
+               nbr.addVelJacobian (
+                  vals, slotMap, node, sm, sk, fem.myUseConsistentMass);
+            }
+            for (FemNodeNeighbor nbr : fem.getIndirectNeighbors(node)) {
+               nbr.addVelJacobian (vals, slotMap, node, sm, sk, false);
+            }
+         }
+      }
+   }
+
+   private void addPosJacobianCrsValues (
+      FemModel3d fem, double[] vals,
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap, double s) {
+
+      if (!fem.myStressesValidP || !fem.myStiffnessesValidP) {
+         fem.updateStressAndStiffness();
+      }
+      for (int i=0; i<fem.myNodes.size(); i++) {
+         FemNode3d node = fem.myNodes.get(i);
+         if (node.getLocalSolveIndex() != -1) {
+            for (FemNodeNeighbor nbr : fem.getNodeNeighbors(node)) {
+               nbr.addPosJacobian (vals, slotMap, node, -s);
+            }
+            for (FemNodeNeighbor nbr : fem.getIndirectNeighbors(node)) {
+               nbr.addPosJacobian (vals, slotMap, node, -s);
+            }
+         }
+      }
+   }
+
+   private void testFemNeighborCrsAssembly() {
+      FemModel3d fem =
+         FemFactory.createTetGrid (null, 1.0, 0.8, 0.6, 1, 1, 1);
+      fem.setMaterial (new LinearMaterial (10000, 0.33));
+      fem.setDensity (1000);
+      fem.setParticleDamping (0.25);
+      fem.setStiffnessDamping (0.1);
+
+      MechModel mech = new MechModel();
+      mech.addModel (fem);
+      SparseNumberedBlockMatrix M = new SparseNumberedBlockMatrix();
+      mech.buildSolveMatrix (M);
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+         M.createCrsBlockSlotMap (Matrix.Partition.Full);
+
+      double[] vals = new double[M.numNonZeroVals()];
+      double s = -0.03;
+      M.setZero();
+      fem.addVelJacobian (M, s);
+      addVelJacobianCrsValues (fem, vals, slotMap, s);
+      checkCrsValuesEqual ("velocity Jacobian CRS assembly", vals, M);
+
+      vals = new double[M.numNonZeroVals()];
+      s = -0.0009;
+      M.setZero();
+      fem.addPosJacobian (M, s);
+      addPosJacobianCrsValues (fem, vals, slotMap, s);
+      checkCrsValuesEqual ("position Jacobian CRS assembly", vals, M);
+   }
+
    void checkNumbering (FemModel3d fem, boolean zeroBased) {
       int inc = zeroBased ? 0 : 1;
       for (int i=0; i< fem.numNodes(); i++) {
@@ -607,6 +698,7 @@ public class FemModel3dTest extends UnitTest {
 
    public void test() {
       //testFrameRelativeMass();
+      testFemNeighborCrsAssembly();
       testFindNearestElement();
       testSetNumbering();
       testFemCopy();
