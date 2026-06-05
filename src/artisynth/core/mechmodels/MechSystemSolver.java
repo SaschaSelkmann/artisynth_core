@@ -99,6 +99,8 @@ public class MechSystemSolver {
    private boolean myUpdateForcesAtStepEnd = false;
    private boolean computeKKTResidual = false;
    private boolean myWarnedGpuAssemblyFallback = false;
+   private int myGpuAssemblyContextVersion = -1;
+   private MechSystem.GpuAssemblyContext myGpuAssemblyContext = null;
 
    // mass matrix stuff
 
@@ -1119,12 +1121,29 @@ public class MechSystemSolver {
       }
    }
 
+   private MechSystem.GpuAssemblyContext getGpuAssemblyContext() {
+      if (!enableGpuAssembly) {
+         return null;
+      }
+      if (myGpuAssemblyContext == null ||
+          myGpuAssemblyContextVersion != mySolveMatrixVersion) {
+         SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+            mySolveMatrix.createCrsBlockSlotMap (Matrix.Partition.Full);
+         myGpuAssemblyContext =
+            new MechSystem.GpuAssemblyContext (
+               mySolveMatrix, slotMap, mySolveMatrixVersion);
+         myGpuAssemblyContextVersion = mySolveMatrixVersion;
+      }
+      return myGpuAssemblyContext;
+   }
+
    private boolean addGpuVelJacobian (
       SparseNumberedBlockMatrix S, VectorNd f, double h, String phase) {
       if (!enableGpuAssembly) {
          return false;
       }
-      boolean assembled = mySys.addGpuVelJacobian (S, f, h);
+      MechSystem.GpuAssemblyContext context = getGpuAssemblyContext();
+      boolean assembled = mySys.addGpuVelJacobian (context, f, h);
       if (!assembled) {
          maybeWarnGpuAssemblyFallback (phase);
       }
@@ -1136,7 +1155,8 @@ public class MechSystemSolver {
       if (!enableGpuAssembly) {
          return false;
       }
-      boolean assembled = mySys.addGpuPosJacobian (S, f, h);
+      MechSystem.GpuAssemblyContext context = getGpuAssemblyContext();
+      boolean assembled = mySys.addGpuPosJacobian (context, f, h);
       if (!assembled) {
          maybeWarnGpuAssemblyFallback (phase);
       }
@@ -1353,6 +1373,8 @@ public class MechSystemSolver {
          mySolveMatrixVersion = mySys.getStructureVersion();
          mySolveMatrix = new SparseNumberedBlockMatrix();
          mySys.buildSolveMatrix (mySolveMatrix);
+         myGpuAssemblyContext = null;
+         myGpuAssemblyContextVersion = -1;
       }
    }
 

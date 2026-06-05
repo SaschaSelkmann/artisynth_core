@@ -21,6 +21,38 @@ import maspack.util.DataBuffer;
  */
 public interface MechSystem {
 
+   /**
+    * Context supplied to optional GPU assembly hooks. It exposes the current
+    * solve matrix structure together with a block-to-CRS slot map that can be
+    * reused while the system structure version remains unchanged.
+    */
+   public static class GpuAssemblyContext {
+      private SparseNumberedBlockMatrix myMatrix;
+      private SparseNumberedBlockMatrix.CrsBlockSlotMap mySlotMap;
+      private int myStructureVersion;
+
+      public GpuAssemblyContext (
+         SparseNumberedBlockMatrix matrix,
+         SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+         int structureVersion) {
+         myMatrix = matrix;
+         mySlotMap = slotMap;
+         myStructureVersion = structureVersion;
+      }
+
+      public SparseNumberedBlockMatrix getMatrix() {
+         return myMatrix;
+      }
+
+      public SparseNumberedBlockMatrix.CrsBlockSlotMap getSlotMap() {
+         return mySlotMap;
+      }
+
+      public int getStructureVersion() {
+         return myStructureVersion;
+      }
+   }
+
    /** 
     * Flag passed to {@link #updateConstraints updateConstraints()}
     * indicating that contact information should be computed.
@@ -449,6 +481,22 @@ public interface MechSystem {
    }
 
    /**
+    * Attempts to add the current force-velocity Jacobian using a GPU assembly
+    * implementation with access to CRS slot metadata. The default method
+    * delegates to the legacy GPU hook, allowing existing implementations to
+    * remain source-compatible.
+    *
+    * @param context GPU assembly context for the current solve matrix
+    * @param f if non-null, returns fictitious Jacobian forces
+    * @param h scale factor for the Jacobian
+    * @return {@code true} if GPU assembly handled the contribution
+    */
+   public default boolean addGpuVelJacobian (
+      GpuAssemblyContext context, VectorNd f, double h) {
+      return addGpuVelJacobian (context.getMatrix(), f, h);
+   }
+
+   /**
     * Adds the current force-position Jacobian, scaled by <code>h</code>, to
     * the matrix <code>S</code>, which should have been previously created with
     * a call to {@link #buildSolveMatrix buildSolveMatrix()}.  Addition
@@ -484,6 +532,22 @@ public interface MechSystem {
    public default boolean addGpuPosJacobian (
       SparseNumberedBlockMatrix S, VectorNd f, double h) {
       return false;
+   }
+
+   /**
+    * Attempts to add the current force-position Jacobian using a GPU assembly
+    * implementation with access to CRS slot metadata. The default method
+    * delegates to the legacy GPU hook, allowing existing implementations to
+    * remain source-compatible.
+    *
+    * @param context GPU assembly context for the current solve matrix
+    * @param f if non-null, returns fictitious Jacobian forces
+    * @param h scale factor for the Jacobian
+    * @return {@code true} if GPU assembly handled the contribution
+    */
+   public default boolean addGpuPosJacobian (
+      GpuAssemblyContext context, VectorNd f, double h) {
+      return addGpuPosJacobian (context.getMatrix(), f, h);
    }
 
    /**
