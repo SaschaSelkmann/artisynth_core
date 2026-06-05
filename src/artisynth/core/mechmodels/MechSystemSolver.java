@@ -1362,6 +1362,24 @@ public class MechSystemSolver {
       return true;
    }
 
+   private void mulAddCrsValues (
+      VectorNd y, VectorNd x, MechSystem.GpuAssemblyContext context,
+      double[] crsValues) {
+
+      int nrows = context.getSlotMap().rowSize();
+      int[] rowOffs = context.getZeroBasedCrsRowOffs();
+      int[] colIdxs = context.getZeroBasedCrsColIdxs();
+      double[] ybuf = y.getBuffer();
+      double[] xbuf = x.getBuffer();
+      for (int i=0; i<nrows; i++) {
+         double sum = 0;
+         for (int k=rowOffs[i]; k<rowOffs[i+1]; k++) {
+            sum += crsValues[k]*xbuf[colIdxs[k]];
+         }
+         ybuf[i] += sum;
+      }
+   }
+
    // begin timing code for the solver
    FunctionTimer factorTimer = new FunctionTimer();
    FunctionTimer solveTimer = new FunctionTimer();
@@ -1454,24 +1472,67 @@ public class MechSystemSolver {
       long tBuildStart = profileGpuAssembly ? System.nanoTime() : 0;
       mySolveMatrix.setZero();
       long tZero = profileGpuAssembly ? System.nanoTime() : 0;
-      myC.setZero ();
-      boolean gpuVel = addGpuVelJacobian (
-         mySolveMatrix, myC, -h, "backwardEuler velocity Jacobian");
-      if (!gpuVel) {
-         mySys.addVelJacobian (mySolveMatrix, myC, -h);
-      }
       boolean assembleDirectCrs =
          enableGpuAssembly &&
          (verifyGpuAssemblyCrs || enableGpuAssemblyDirectCrs);
       MechSystem.GpuAssemblyContext directCrsContext =
          assembleDirectCrs ? getGpuAssemblyContext (vsize, vsize) : null;
-      boolean crsVerified =
+      boolean directCrsMatrixReady = false;
+      boolean crsVerified = false;
+      double[] directCrsVelValues = null;
+      VectorNd directCrsVelForces = null;
+      VectorNd directCrsPosForces = null;
+      boolean gpuVel = false;
+      boolean gpuPos = false;
+      boolean tryDirectCrsOnly =
          directCrsContext != null &&
-         verifyGpuVelJacobianCrs (
-            directCrsContext, -h, "backwardEuler velocity Jacobian");
+         enableGpuAssemblyDirectCrs &&
+         !verifyGpuAssemblyCrs &&
+         myUseDirectSolver &&
+         myDirectSolver instanceof CuDssSolver;
+
+      if (tryDirectCrsOnly) {
+         directCrsContext.clearCrsValues();
+         myC.setZero();
+         if (mySys.assembleGpuVelJacobianCrsValues (
+                directCrsContext, myC, -h)) {
+            directCrsVelValues = directCrsContext.getCrsValues().clone();
+            if (useFictitousJacobianForces) {
+               directCrsVelForces = new VectorNd (myC);
+            }
+            myC.setZero();
+            if (mySys.assembleGpuPosJacobianCrsValues (
+                   directCrsContext, myC, -h * h)) {
+               if (useFictitousJacobianForces) {
+                  directCrsPosForces = new VectorNd (myC);
+               }
+               directCrsMatrixReady =
+                  addActiveMassMatrixCrsValues (directCrsContext);
+               crsVerified = directCrsMatrixReady;
+            }
+         }
+      }
+
+      if (!directCrsMatrixReady) {
+         myC.setZero ();
+         gpuVel = addGpuVelJacobian (
+            mySolveMatrix, myC, -h, "backwardEuler velocity Jacobian");
+         if (!gpuVel) {
+            mySys.addVelJacobian (mySolveMatrix, myC, -h);
+         }
+         crsVerified =
+            directCrsContext != null &&
+            verifyGpuVelJacobianCrs (
+               directCrsContext, -h, "backwardEuler velocity Jacobian");
+      }
       long tVelJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
-         myB.scaledAdd (h, myC);
+         if (directCrsMatrixReady) {
+            myB.scaledAdd (h, directCrsVelForces);
+         }
+         else {
+            myB.scaledAdd (h, myC);
+         }
       }
 
       //MatrixNd S = new MatrixNd(3, 3);
@@ -1479,34 +1540,49 @@ public class MechSystemSolver {
       //System.out.println ("SV=\n" + S.toString("%g"));
 
       // b += Jv v
-      mySolveMatrix.mulAdd (myB, myU, vsize, vsize);
+      if (directCrsMatrixReady) {
+         mulAddCrsValues (
+            myB, myU, directCrsContext, directCrsVelValues);
+      }
+      else {
+         mySolveMatrix.mulAdd (myB, myU, vsize, vsize);
+      }
       long tMulJv = profileGpuAssembly ? System.nanoTime() : 0;
 
-      myC.setZero ();
-      boolean gpuPos = addGpuPosJacobian (
-         mySolveMatrix, myC, -h * h, "backwardEuler position Jacobian");
-      if (!gpuPos) {
-         mySys.addPosJacobian (mySolveMatrix, myC, -h * h);
-      }
-      if (crsVerified) {
-         crsVerified = verifyGpuPosJacobianCrs (
-            directCrsContext, -h * h, "backwardEuler position Jacobian",
-            /*cumulative=*/true);
+      if (!directCrsMatrixReady) {
+         myC.setZero ();
+         gpuPos = addGpuPosJacobian (
+            mySolveMatrix, myC, -h * h, "backwardEuler position Jacobian");
+         if (!gpuPos) {
+            mySys.addPosJacobian (mySolveMatrix, myC, -h * h);
+         }
+         if (crsVerified) {
+            crsVerified = verifyGpuPosJacobianCrs (
+               directCrsContext, -h * h, "backwardEuler position Jacobian",
+               /*cumulative=*/true);
+         }
       }
       long tPosJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
-         myB.scaledAdd (h, myC);
+         if (directCrsMatrixReady) {
+            myB.scaledAdd (h, directCrsPosForces);
+         }
+         else {
+            myB.scaledAdd (h, myC);
+         }
       }
 
       //mySolveMatrix.getSubMatrix (0, 0, S);
       //System.out.println ("SP=\n" + S.toString("%g"));
 
-      addActiveMassMatrix (mySys, mySolveMatrix);
-      if (crsVerified) {
-         crsVerified = addActiveMassMatrixCrsValues (directCrsContext);
-         if (crsVerified && verifyGpuAssemblyCrs) {
-            checkGpuAssemblyCrsValues (
-               "backwardEuler mass matrix", directCrsContext);
+      if (!directCrsMatrixReady) {
+         addActiveMassMatrix (mySys, mySolveMatrix);
+         if (crsVerified) {
+            crsVerified = addActiveMassMatrixCrsValues (directCrsContext);
+            if (crsVerified && verifyGpuAssemblyCrs) {
+               checkGpuAssemblyCrsValues (
+                  "backwardEuler mass matrix", directCrsContext);
+            }
          }
       }
       long tMass = profileGpuAssembly ? System.nanoTime() : 0;

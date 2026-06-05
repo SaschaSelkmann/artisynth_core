@@ -568,6 +568,24 @@ public interface MechSystem {
    }
 
    /**
+    * Optionally assembles the scaled force-velocity Jacobian directly into
+    * CRS values while also returning fictitious Jacobian forces.
+    *
+    * @param context GPU assembly context containing CRS values and slot map
+    * @param f if non-null, returns fictitious Jacobian forces
+    * @param h scale factor for the Jacobian
+    * @return {@code true} if the full system contribution was assembled
+    */
+   public default boolean assembleGpuVelJacobianCrsValues (
+      GpuAssemblyContext context, VectorNd f, double h) {
+      if (f != null) {
+         f.setSize (context.getSlotMap().rowSize());
+         f.setZero();
+      }
+      return assembleGpuVelJacobianCrsValues (context, h);
+   }
+
+   /**
     * Adds the current force-position Jacobian, scaled by <code>h</code>, to
     * the matrix <code>S</code>, which should have been previously created with
     * a call to {@link #buildSolveMatrix buildSolveMatrix()}.  Addition
@@ -634,6 +652,24 @@ public interface MechSystem {
    public default boolean assembleGpuPosJacobianCrsValues (
       GpuAssemblyContext context, double h) {
       return false;
+   }
+
+   /**
+    * Optionally assembles the scaled force-position Jacobian directly into
+    * CRS values while also returning fictitious Jacobian forces.
+    *
+    * @param context GPU assembly context containing CRS values and slot map
+    * @param f if non-null, returns fictitious Jacobian forces
+    * @param h scale factor for the Jacobian
+    * @return {@code true} if the full system contribution was assembled
+    */
+   public default boolean assembleGpuPosJacobianCrsValues (
+      GpuAssemblyContext context, VectorNd f, double h) {
+      if (f != null) {
+         f.setSize (context.getSlotMap().rowSize());
+         f.setZero();
+      }
+      return assembleGpuPosJacobianCrsValues (context, h);
    }
 
    /**
