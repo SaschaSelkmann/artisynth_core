@@ -4121,10 +4121,41 @@ PointAttachable, ConnectableBody {
          context.getCrsValues(), context.getSlotMap(), s);
    }
 
+   public void addVelJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      if (!myStressesValidP || !myStiffnessesValidP) {
+         updateStressAndStiffness();
+      }
+      double sm = -s*myMassDamping;
+      double sk = -s*myStiffnessDamping;
+      for (int i = 0; i < myNodes.size(); i++) {
+         FemNode3d node = myNodes.get(i);
+         if (node.getLocalSolveIndex() != -1) {
+            for (FemNodeNeighbor nbr : getNodeNeighbors(node)) {
+               nbr.addVelJacobianCrsContributions (
+                  context, node, sm, sk, myUseConsistentMass);
+            }
+            // used for soft nodal-based incompressibilty:
+            for (FemNodeNeighbor nbr : getIndirectNeighbors(node)) {
+               nbr.addVelJacobianCrsContributions (
+                  context, node, sm, sk, false);
+            }
+         }
+      }
+   }
+
    public boolean assembleVelJacobianCrsValues (
       MechSystem.GpuAssemblyContext context, double s) {
 
       addVelJacobianCrsValues (context, s);
+      return true;
+   }
+
+   public boolean assembleVelJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      addVelJacobianCrsValueContributions (context, s);
       return true;
    }
 
@@ -4184,10 +4215,37 @@ PointAttachable, ConnectableBody {
          context.getCrsValues(), context.getSlotMap(), s);
    }
 
+   public void addPosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      if (!myStressesValidP || !myStiffnessesValidP) {
+         updateStressAndStiffness();
+      }
+      for (int i = 0; i < myNodes.size(); i++) {
+         FemNode3d node = myNodes.get(i);
+         if (node.getLocalSolveIndex() != -1) {
+            for (FemNodeNeighbor nbr : getNodeNeighbors(node)) {
+               nbr.addPosJacobianCrsContributions (context, node, -s);
+            }
+            // used for soft nodal-based incompressibilty:
+            for (FemNodeNeighbor nbr : getIndirectNeighbors(node)) {
+               nbr.addPosJacobianCrsContributions (context, node, -s);
+            }
+         }
+      }
+   }
+
    public boolean assemblePosJacobianCrsValues (
       MechSystem.GpuAssemblyContext context, double s) {
 
       addPosJacobianCrsValues (context, s);
+      return true;
+   }
+
+   public boolean assemblePosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      addPosJacobianCrsValueContributions (context, s);
       return true;
    }
 

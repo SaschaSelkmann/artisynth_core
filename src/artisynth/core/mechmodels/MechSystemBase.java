@@ -2423,6 +2423,33 @@ public abstract class MechSystemBase extends RenderableModelBase
       return complete;
    }
 
+   public boolean assembleGpuPosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, VectorNd f, double s) {
+
+      updateDynamicComponentLists();
+      updateForceComponentList();
+      if (!checkMatrixSize (context.getMatrix())) {
+         throw new IllegalArgumentException (
+            "context matrix improperly sized; perhaps not created with "+
+            "buildSolveMatrix()?");
+      }
+      if (f != null) {
+         f.setSize (mySystemSize);
+         f.setZero();
+      }
+      boolean complete = true;
+      for (int i=0; i<myForceEffectors.size(); i++) {
+         if (!myForceEffectors.get(i).assemblePosJacobianCrsValueContributions (
+                context, s)) {
+            complete = false;
+         }
+      }
+      if (hasAttachmentJacobianContributions()) {
+         complete = false;
+      }
+      return complete;
+   }
+
    public boolean assembleGpuVelJacobianCrsValues (
       MechSystem.GpuAssemblyContext context, double s) {
 
@@ -2436,6 +2463,33 @@ public abstract class MechSystemBase extends RenderableModelBase
       boolean complete = true;
       for (int i=0; i<myForceEffectors.size(); i++) {
          if (!myForceEffectors.get(i).assembleVelJacobianCrsValues (
+                context, s)) {
+            complete = false;
+         }
+      }
+      if (hasAttachmentJacobianContributions()) {
+         complete = false;
+      }
+      return complete;
+   }
+
+   public boolean assembleGpuVelJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, VectorNd f, double s) {
+
+      updateDynamicComponentLists();
+      updateForceComponentList();
+      if (!checkMatrixSize (context.getMatrix())) {
+         throw new IllegalArgumentException (
+            "context matrix improperly sized; perhaps not created with "+
+            "buildSolveMatrix()?");
+      }
+      if (f != null) {
+         f.setSize (mySystemSize);
+         f.setZero();
+      }
+      boolean complete = true;
+      for (int i=0; i<myForceEffectors.size(); i++) {
+         if (!myForceEffectors.get(i).assembleVelJacobianCrsValueContributions (
                 context, s)) {
             complete = false;
          }

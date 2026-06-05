@@ -87,6 +87,21 @@ public interface ForceEffector {
    }
 
    /**
+    * Optionally assembles the scaled position Jacobian as CRS slot/value
+    * contributions supplied by a GPU assembly context. The default
+    * implementation reports that this effector does not support contribution
+    * assembly.
+    *
+    * @param context GPU assembly context containing contribution buffers
+    * @param s scaling factor for position Jacobian
+    * @return {@code true} if the contribution was fully assembled
+    */
+   public default boolean assemblePosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return false;
+   }
+
+   /**
     * Optionally assembles the scaled velocity Jacobian directly into CRS values
     * supplied by a GPU assembly context. The default implementation reports
     * that this effector does not support direct CRS assembly.
@@ -96,6 +111,21 @@ public interface ForceEffector {
     * @return {@code true} if the contribution was fully assembled
     */
    public default boolean assembleVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return false;
+   }
+
+   /**
+    * Optionally assembles the scaled velocity Jacobian as CRS slot/value
+    * contributions supplied by a GPU assembly context. The default
+    * implementation reports that this effector does not support contribution
+    * assembly.
+    *
+    * @param context GPU assembly context containing contribution buffers
+    * @param s scaling factor for velocity Jacobian
+    * @return {@code true} if the contribution was fully assembled
+    */
+   public default boolean assembleVelJacobianCrsValueContributions (
       MechSystem.GpuAssemblyContext context, double s) {
       return false;
    }

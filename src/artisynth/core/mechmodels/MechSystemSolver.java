@@ -1310,6 +1310,25 @@ public class MechSystemSolver {
       return true;
    }
 
+   private boolean addBlockToCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, MatrixBlock srcBlk,
+      MatrixBlock dstBlk, double s) {
+
+      if (dstBlk == null || srcBlk == null) {
+         return false;
+      }
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap = context.getSlotMap();
+      for (int i=0; i<srcBlk.rowSize(); i++) {
+         for (int j=0; j<srcBlk.colSize(); j++) {
+            int slot = slotMap.getBlockValueSlot (dstBlk, i, j);
+            if (slot != -1) {
+               context.addCrsValueContribution (slot, s*srcBlk.get (i, j));
+            }
+         }
+      }
+      return true;
+   }
+
    private boolean addSparseBlockMatrixToCrsValues (
       MechSystem.GpuAssemblyContext context, SparseBlockMatrix M,
       int numBlkRows, int numBlkCols, double s) {
@@ -1328,10 +1347,36 @@ public class MechSystemSolver {
       return true;
    }
 
+   private boolean addSparseBlockMatrixToCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, SparseBlockMatrix M,
+      int numBlkRows, int numBlkCols, double s) {
+
+      SparseNumberedBlockMatrix S = context.getMatrix();
+      for (int bi=0; bi<numBlkRows; bi++) {
+         for (MatrixBlock blk=M.firstBlockInRow(bi);
+              blk != null && blk.getBlockCol() < numBlkCols;
+              blk=blk.next()) {
+            MatrixBlock dstBlk = S.getBlock (bi, blk.getBlockCol());
+            if (!addBlockToCrsValueContributions (context, blk, dstBlk, s)) {
+               return false;
+            }
+         }
+      }
+      return true;
+   }
+
    private boolean addActiveMassMatrixCrsValues (
       MechSystem.GpuAssemblyContext context) {
 
       return addSparseBlockMatrixToCrsValues (
+         context, myMass, mySys.numActiveComponents(),
+         mySys.numActiveComponents(), 1);
+   }
+
+   private boolean addActiveMassMatrixCrsValueContributions (
+      MechSystem.GpuAssemblyContext context) {
+
+      return addSparseBlockMatrixToCrsValueContributions (
          context, myMass, mySys.numActiveComponents(),
          mySys.numActiveComponents(), 1);
    }
@@ -1493,21 +1538,22 @@ public class MechSystemSolver {
 
       if (tryDirectCrsOnly) {
          directCrsContext.clearCrsValues();
+         directCrsContext.clearCrsValueContributions();
          myC.setZero();
-         if (mySys.assembleGpuVelJacobianCrsValues (
+         if (mySys.assembleGpuVelJacobianCrsValueContributions (
                 directCrsContext, myC, -h)) {
             directCrsVelValues = directCrsContext.getCrsValues().clone();
             if (useFictitousJacobianForces) {
                directCrsVelForces = new VectorNd (myC);
             }
             myC.setZero();
-            if (mySys.assembleGpuPosJacobianCrsValues (
+            if (mySys.assembleGpuPosJacobianCrsValueContributions (
                    directCrsContext, myC, -h * h)) {
                if (useFictitousJacobianForces) {
                   directCrsPosForces = new VectorNd (myC);
                }
                directCrsMatrixReady =
-                  addActiveMassMatrixCrsValues (directCrsContext);
+                  addActiveMassMatrixCrsValueContributions (directCrsContext);
                crsVerified = directCrsMatrixReady;
             }
          }
@@ -1635,7 +1681,18 @@ public class MechSystemSolver {
       if (vsize != 0) {
          if (myUseDirectSolver) {
             if (useDirectCrs) {
-               myDirectSolver.factor (directCrsContext.getCrsValues());
+               if (directCrsContext.numCrsValueContributions() > 0) {
+                  CuDssSolver cudss = (CuDssSolver)myDirectSolver;
+                  cudss.clearDeviceValues();
+                  cudss.addDeviceValues (
+                     directCrsContext.getCrsValueContributionSlots(),
+                     directCrsContext.getCrsValueContributions(),
+                     directCrsContext.numCrsValueContributions(), 1.0);
+                  cudss.factorDeviceValues();
+               }
+               else {
+                  myDirectSolver.factor (directCrsContext.getCrsValues());
+               }
                myDirectSolver.solve (myU, myB);
             }
             else {

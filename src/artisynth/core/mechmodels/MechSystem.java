@@ -34,6 +34,9 @@ public interface MechSystem {
       private int[] myCrsRowOffs;
       private int[] myZeroBasedCrsColIdxs;
       private int[] myZeroBasedCrsRowOffs;
+      private int[] myCrsValueSlots;
+      private double[] myCrsValueContributions;
+      private int myNumCrsValueContributions;
       private int myStructureVersion;
 
       public GpuAssemblyContext (
@@ -50,6 +53,9 @@ public interface MechSystem {
          matrix.getCRSIndices (
             myCrsColIdxs, myCrsRowOffs, Matrix.Partition.Full,
             slotMap.rowSize(), slotMap.colSize());
+         myCrsValueSlots = new int[0];
+         myCrsValueContributions = new double[0];
+         myNumCrsValueContributions = 0;
       }
 
       public SparseNumberedBlockMatrix getMatrix() {
@@ -66,6 +72,42 @@ public interface MechSystem {
 
       public void clearCrsValues() {
          Arrays.fill (myCrsValues, 0);
+      }
+
+      public void clearCrsValueContributions() {
+         myNumCrsValueContributions = 0;
+      }
+
+      public void addCrsValueContribution (int slot, double value) {
+         if (value == 0) {
+            return;
+         }
+         ensureCrsValueContributionCapacity (myNumCrsValueContributions+1);
+         myCrsValueSlots[myNumCrsValueContributions] = slot;
+         myCrsValueContributions[myNumCrsValueContributions] = value;
+         myNumCrsValueContributions++;
+         myCrsValues[slot] += value;
+      }
+
+      private void ensureCrsValueContributionCapacity (int cap) {
+         if (myCrsValueSlots.length < cap) {
+            int newCap = Math.max (cap, Math.max (64, 2*myCrsValueSlots.length));
+            myCrsValueSlots = Arrays.copyOf (myCrsValueSlots, newCap);
+            myCrsValueContributions =
+               Arrays.copyOf (myCrsValueContributions, newCap);
+         }
+      }
+
+      public int numCrsValueContributions() {
+         return myNumCrsValueContributions;
+      }
+
+      public int[] getCrsValueContributionSlots() {
+         return myCrsValueSlots;
+      }
+
+      public double[] getCrsValueContributions() {
+         return myCrsValueContributions;
       }
 
       /**
@@ -586,6 +628,16 @@ public interface MechSystem {
    }
 
    /**
+    * Optionally assembles the scaled force-velocity Jacobian as CRS
+    * slot/value contributions. Implementations should add contributions using
+    * {@link GpuAssemblyContext#addCrsValueContribution}.
+    */
+   public default boolean assembleGpuVelJacobianCrsValueContributions (
+      GpuAssemblyContext context, VectorNd f, double h) {
+      return false;
+   }
+
+   /**
     * Adds the current force-position Jacobian, scaled by <code>h</code>, to
     * the matrix <code>S</code>, which should have been previously created with
     * a call to {@link #buildSolveMatrix buildSolveMatrix()}.  Addition
@@ -670,6 +722,16 @@ public interface MechSystem {
          f.setZero();
       }
       return assembleGpuPosJacobianCrsValues (context, h);
+   }
+
+   /**
+    * Optionally assembles the scaled force-position Jacobian as CRS
+    * slot/value contributions. Implementations should add contributions using
+    * {@link GpuAssemblyContext#addCrsValueContribution}.
+    */
+   public default boolean assembleGpuPosJacobianCrsValueContributions (
+      GpuAssemblyContext context, VectorNd f, double h) {
+      return false;
    }
 
    /**
