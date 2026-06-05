@@ -567,6 +567,7 @@ public class FemModel3dTest extends UnitTest {
       fem.setDensity (1000);
       fem.setParticleDamping (0.25);
       fem.setStiffnessDamping (0.1);
+      fem.getNode (0).setDynamic (false);
 
       MechModel mech = new MechModel();
       mech.addModel (fem);

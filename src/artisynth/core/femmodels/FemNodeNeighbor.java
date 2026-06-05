@@ -200,6 +200,9 @@ public class FemNodeNeighbor {
       if (blkNum == -1 || K == null || s == 0) {
          return;
       }
+      if (!slotMap.hasBlockSlots (blkNum)) {
+         return;
+      }
       vals[slotMap.getBlockSlot (blkNum, 0)] += s*K.m00;
       vals[slotMap.getBlockSlot (blkNum, 1)] += s*K.m01;
       vals[slotMap.getBlockSlot (blkNum, 2)] += s*K.m02;
@@ -220,6 +223,9 @@ public class FemNodeNeighbor {
       }
       SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
          context.getSlotMap();
+      if (!slotMap.hasBlockSlots (blkNum)) {
+         return;
+      }
       context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 0), s*K.m00);
       context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 1), s*K.m01);
       context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 2), s*K.m02);
@@ -238,6 +244,9 @@ public class FemNodeNeighbor {
       if (blkNum == -1 || d == 0) {
          return;
       }
+      if (!slotMap.hasBlockSlots (blkNum)) {
+         return;
+      }
       vals[slotMap.getBlockSlot (blkNum, 0)] += d;
       vals[slotMap.getBlockSlot (blkNum, 4)] += d;
       vals[slotMap.getBlockSlot (blkNum, 8)] += d;
@@ -251,6 +260,9 @@ public class FemNodeNeighbor {
       }
       SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
          context.getSlotMap();
+      if (!slotMap.hasBlockSlots (blkNum)) {
+         return;
+      }
       context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 0), d);
       context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 4), d);
       context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 8), d);

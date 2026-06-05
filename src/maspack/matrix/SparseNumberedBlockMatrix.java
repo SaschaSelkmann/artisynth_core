@@ -70,6 +70,12 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
          return myBlockOffs[blockNumber+1] - myBlockOffs[blockNumber];
       }
 
+      public boolean hasBlockSlots (int blockNumber) {
+         return (blockNumber >= 0 &&
+                 blockNumber + 1 < myBlockOffs.length &&
+                 myBlockOffs[blockNumber+1] > myBlockOffs[blockNumber]);
+      }
+
       public int getBlockSlot (int blockNumber, int localSlotIdx) {
          checkBlockNumber (blockNumber);
          int off = myBlockOffs[blockNumber];
