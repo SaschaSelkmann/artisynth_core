@@ -596,7 +596,8 @@ public class FemModel3dTest extends UnitTest {
    }
 
    private void testBackwardEulerDirectCrsSolve() {
-      if (!Boolean.getBoolean ("artisynth.gpuAssembly.directCrs")) {
+      if (!Boolean.getBoolean ("artisynth.gpuAssembly.directCrs") &&
+          !Boolean.getBoolean ("artisynth.gpuAssembly.testCuDssAutoDirectCrs")) {
          return;
       }
       if (!maspack.solvers.CuDssSolver.isAvailable()) {

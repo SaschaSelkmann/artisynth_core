@@ -1717,10 +1717,11 @@ public class Main implements DriverInterface, ComponentChangeListener {
       FemModel3d.noIncompressStiffnessDamping = noIncompressDamping.value;
 
       // matrix solver
+      SparseSolverId solver = mySimulationPrefs.getMatrixSolver();
       if (matrixSolver.value != null) {
-         MechSystemBase.setDefaultMatrixSolver (
-            SparseSolverId.valueOf (matrixSolver.value));
+         solver = SparseSolverId.valueOf (matrixSolver.value);
       }
+      MechSystemBase.setDefaultMatrixSolver (solver);
    }      
 
    private void initializeMaintenancePrefs () {

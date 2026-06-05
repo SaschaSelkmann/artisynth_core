@@ -79,11 +79,11 @@ public class MechSystemSolver {
    public boolean profileImplicitFriction = false;
    private static final boolean profileGpuAssembly =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
-   private static final boolean enableGpuAssembly =
+   private static final boolean enableGpuAssemblyProperty =
       Boolean.getBoolean ("artisynth.gpuAssembly.enabled");
    private static final boolean verifyGpuAssemblyCrs =
       Boolean.getBoolean ("artisynth.gpuAssembly.verifyCrs");
-   private static final boolean enableGpuAssemblyDirectCrs =
+   private static final boolean enableGpuAssemblyDirectCrsProperty =
       Boolean.getBoolean ("artisynth.gpuAssembly.directCrs");
    public boolean printChecksums = false;
    public boolean printPosChecksum = false;
@@ -1121,6 +1121,15 @@ public class MechSystemSolver {
       return name != null ? name : mySys.getClass().getSimpleName();
    }
 
+   private boolean enableGpuAssembly() {
+      return enableGpuAssemblyProperty || myMatrixSolver == SparseSolverId.CuDss;
+   }
+
+   private boolean enableGpuAssemblyDirectCrs() {
+      return (enableGpuAssemblyDirectCrsProperty ||
+              myMatrixSolver == SparseSolverId.CuDss);
+   }
+
    private void maybeWarnGpuAssemblyFallback (String phase) {
       if (!myWarnedGpuAssemblyFallback) {
          System.out.println (
@@ -1137,7 +1146,7 @@ public class MechSystemSolver {
 
    private MechSystem.GpuAssemblyContext getGpuAssemblyContext (
       int rowSize, int colSize) {
-      if (!enableGpuAssembly) {
+      if (!enableGpuAssembly()) {
          return null;
       }
       if (myGpuAssemblyContext == null ||
@@ -1159,7 +1168,7 @@ public class MechSystemSolver {
 
    private boolean addGpuVelJacobian (
       SparseNumberedBlockMatrix S, VectorNd f, double h, String phase) {
-      if (!enableGpuAssembly) {
+      if (!enableGpuAssembly()) {
          return false;
       }
       MechSystem.GpuAssemblyContext context = getGpuAssemblyContext();
@@ -1172,7 +1181,7 @@ public class MechSystemSolver {
 
    private boolean addGpuPosJacobian (
       SparseNumberedBlockMatrix S, VectorNd f, double h, String phase) {
-      if (!enableGpuAssembly) {
+      if (!enableGpuAssembly()) {
          return false;
       }
       MechSystem.GpuAssemblyContext context = getGpuAssemblyContext();
@@ -1228,8 +1237,8 @@ public class MechSystemSolver {
    }
 
    private boolean verifyGpuVelJacobianCrs (double h, String phase) {
-      if ((!verifyGpuAssemblyCrs && !enableGpuAssemblyDirectCrs) ||
-          !enableGpuAssembly) {
+      if ((!verifyGpuAssemblyCrs && !enableGpuAssemblyDirectCrs()) ||
+          !enableGpuAssembly()) {
          return false;
       }
       return verifyGpuVelJacobianCrs (
@@ -1254,8 +1263,8 @@ public class MechSystemSolver {
 
    private boolean verifyGpuPosJacobianCrs (
       double h, String phase, boolean cumulative) {
-      if ((!verifyGpuAssemblyCrs && !enableGpuAssemblyDirectCrs) ||
-          !enableGpuAssembly) {
+      if ((!verifyGpuAssemblyCrs && !enableGpuAssemblyDirectCrs()) ||
+          !enableGpuAssembly()) {
          return false;
       }
       return verifyGpuPosJacobianCrs (
@@ -1385,7 +1394,7 @@ public class MechSystemSolver {
       boolean crsAssembled, int vsize,
       MechSystem.GpuAssemblyContext context) {
 
-      if (!enableGpuAssemblyDirectCrs) {
+      if (!enableGpuAssemblyDirectCrs()) {
          return false;
       }
       if (!crsAssembled) {
@@ -1518,8 +1527,8 @@ public class MechSystemSolver {
       mySolveMatrix.setZero();
       long tZero = profileGpuAssembly ? System.nanoTime() : 0;
       boolean assembleDirectCrs =
-         enableGpuAssembly &&
-         (verifyGpuAssemblyCrs || enableGpuAssemblyDirectCrs);
+         enableGpuAssembly() &&
+         (verifyGpuAssemblyCrs || enableGpuAssemblyDirectCrs());
       MechSystem.GpuAssemblyContext directCrsContext =
          assembleDirectCrs ? getGpuAssemblyContext (vsize, vsize) : null;
       boolean directCrsMatrixReady = false;
@@ -1531,7 +1540,7 @@ public class MechSystemSolver {
       boolean gpuPos = false;
       boolean tryDirectCrsOnly =
          directCrsContext != null &&
-         enableGpuAssemblyDirectCrs &&
+         enableGpuAssemblyDirectCrs() &&
          !verifyGpuAssemblyCrs &&
          myUseDirectSolver &&
          myDirectSolver instanceof CuDssSolver;

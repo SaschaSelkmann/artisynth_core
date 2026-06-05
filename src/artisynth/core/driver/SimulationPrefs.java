@@ -164,6 +164,7 @@ public class SimulationPrefs extends Preferences {
       setHybridSolvesEnabled (mySettings.getHybridSolvesEnabled());
       setNumSolverThreads (mySettings.getNumSolverThreads());
       setShowIllConditionedSolves (mySettings.getShowIllConditionedSolves());
+      setMatrixSolver (mySettings.getMatrixSolver());
    }
 
    public void applyToCurrent() {
@@ -175,6 +176,7 @@ public class SimulationPrefs extends Preferences {
       mySettings.setHybridSolvesEnabled (getHybridSolvesEnabled());
       mySettings.setNumSolverThreads (getNumSolverThreads());
       mySettings.setShowIllConditionedSolves (getShowIllConditionedSolves());
+      mySettings.setMatrixSolver (getMatrixSolver());
 
       if (mySettings.getDialog() != null) {
          mySettings.getDialog().updateWidgetValues();

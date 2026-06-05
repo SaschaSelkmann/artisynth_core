@@ -45,7 +45,6 @@ public class SimulationSettings extends SettingsBase {
    private boolean myShowIllConditionedSolves =
       DEFAULT_SHOW_ILL_CONDITIONED_SOLVES;
 
-   // to be incorporated later
    public static SparseSolverId DEFAULT_MATRIX_SOLVER = SparseSolverId.Pardiso;
 
    static {
@@ -81,6 +80,10 @@ public class SimulationSettings extends SettingsBase {
          "showIllConditionedSolves", 
          "print a message when a solve is ill conditioned",
          DEFAULT_SHOW_ILL_CONDITIONED_SOLVES);
+      myProps.add (
+         "matrixSolver",
+         "default sparse matrix solver",
+         DEFAULT_MATRIX_SOLVER);
    }
 
    public PropertyList getAllPropertyInfo () {
@@ -159,14 +162,11 @@ public class SimulationSettings extends SettingsBase {
       myShowIllConditionedSolves = enable;
    } 
 
-   // for later use:
-
    public SparseSolverId getMatrixSolver () {
-      return null;
+      return MechSystemBase.getDefaultMatrixSolver();
    }
 
    public void setMatrixSolver (SparseSolverId MatrixSolver) {
+      MechSystemBase.setDefaultMatrixSolver (MatrixSolver);
    }
-
-
 }
