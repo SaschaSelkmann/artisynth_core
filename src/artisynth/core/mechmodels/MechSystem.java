@@ -428,6 +428,27 @@ public interface MechSystem {
    public void addVelJacobian (SparseNumberedBlockMatrix S, VectorNd f, double h);
 
    /**
+    * Attempts to add the current force-velocity Jacobian using a GPU assembly
+    * implementation. Implementations should return {@code true} only if they
+    * handled the entire requested contribution and updated {@code f} in the
+    * same way as {@link #addVelJacobian addVelJacobian()} when {@code f} is
+    * non-null. The default implementation reports that GPU assembly is not
+    * available, leaving callers to use the CPU path.
+    *
+    * @param S
+    * matrix to which scaled Jacobian is to be added
+    * @param f
+    * if non-null, returns fictitious forces associated with the Jacobian
+    * @param h
+    * scale factor for the Jacobian
+    * @return {@code true} if GPU assembly handled the contribution
+    */
+   public default boolean addGpuVelJacobian (
+      SparseNumberedBlockMatrix S, VectorNd f, double h) {
+      return false;
+   }
+
+   /**
     * Adds the current force-position Jacobian, scaled by <code>h</code>, to
     * the matrix <code>S</code>, which should have been previously created with
     * a call to {@link #buildSolveMatrix buildSolveMatrix()}.  Addition
@@ -443,6 +464,27 @@ public interface MechSystem {
     * scale factor for the Jacobian
     */
    public void addPosJacobian (SparseNumberedBlockMatrix S, VectorNd f, double h);
+
+   /**
+    * Attempts to add the current force-position Jacobian using a GPU assembly
+    * implementation. Implementations should return {@code true} only if they
+    * handled the entire requested contribution and updated {@code f} in the
+    * same way as {@link #addPosJacobian addPosJacobian()} when {@code f} is
+    * non-null. The default implementation reports that GPU assembly is not
+    * available, leaving callers to use the CPU path.
+    *
+    * @param S
+    * matrix to which scaled Jacobian is to be added
+    * @param f
+    * if non-null, returns fictitious forces associated with the Jacobian
+    * @param h
+    * scale factor for the Jacobian
+    * @return {@code true} if GPU assembly handled the contribution
+    */
+   public default boolean addGpuPosJacobian (
+      SparseNumberedBlockMatrix S, VectorNd f, double h) {
+      return false;
+   }
 
    /**
     * Queries whether or not the matrix structure of the bilateral constraints

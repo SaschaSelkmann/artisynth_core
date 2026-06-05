@@ -79,6 +79,8 @@ public class MechSystemSolver {
    public boolean profileImplicitFriction = false;
    private static final boolean profileGpuAssembly =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
+   private static final boolean enableGpuAssembly =
+      Boolean.getBoolean ("artisynth.gpuAssembly.enabled");
    public boolean printChecksums = false;
    public boolean printPosChecksum = false;
    public boolean printVelChecksum = false;
@@ -96,6 +98,7 @@ public class MechSystemSolver {
    
    private boolean myUpdateForcesAtStepEnd = false;
    private boolean computeKKTResidual = false;
+   private boolean myWarnedGpuAssemblyFallback = false;
 
    // mass matrix stuff
 
@@ -1107,6 +1110,39 @@ public class MechSystemSolver {
       return name != null ? name : mySys.getClass().getSimpleName();
    }
 
+   private void maybeWarnGpuAssemblyFallback (String phase) {
+      if (!myWarnedGpuAssemblyFallback) {
+         System.out.println (
+            "MechSystemSolver: GPU assembly requested for "+phase+
+            " but this MechSystem does not provide it; using CPU assembly.");
+         myWarnedGpuAssemblyFallback = true;
+      }
+   }
+
+   private boolean addGpuVelJacobian (
+      SparseNumberedBlockMatrix S, VectorNd f, double h, String phase) {
+      if (!enableGpuAssembly) {
+         return false;
+      }
+      boolean assembled = mySys.addGpuVelJacobian (S, f, h);
+      if (!assembled) {
+         maybeWarnGpuAssemblyFallback (phase);
+      }
+      return assembled;
+   }
+
+   private boolean addGpuPosJacobian (
+      SparseNumberedBlockMatrix S, VectorNd f, double h, String phase) {
+      if (!enableGpuAssembly) {
+         return false;
+      }
+      boolean assembled = mySys.addGpuPosJacobian (S, f, h);
+      if (!assembled) {
+         maybeWarnGpuAssemblyFallback (phase);
+      }
+      return assembled;
+   }
+
    // begin timing code for the solver
    FunctionTimer factorTimer = new FunctionTimer();
    FunctionTimer solveTimer = new FunctionTimer();
@@ -1200,7 +1236,11 @@ public class MechSystemSolver {
       mySolveMatrix.setZero();
       long tZero = profileGpuAssembly ? System.nanoTime() : 0;
       myC.setZero ();
-      mySys.addVelJacobian (mySolveMatrix, myC, -h);
+      boolean gpuVel = addGpuVelJacobian (
+         mySolveMatrix, myC, -h, "backwardEuler velocity Jacobian");
+      if (!gpuVel) {
+         mySys.addVelJacobian (mySolveMatrix, myC, -h);
+      }
       long tVelJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
          myB.scaledAdd (h, myC);
@@ -1215,7 +1255,11 @@ public class MechSystemSolver {
       long tMulJv = profileGpuAssembly ? System.nanoTime() : 0;
 
       myC.setZero ();
-      mySys.addPosJacobian (mySolveMatrix, myC, -h * h);
+      boolean gpuPos = addGpuPosJacobian (
+         mySolveMatrix, myC, -h * h, "backwardEuler position Jacobian");
+      if (!gpuPos) {
+         mySys.addPosJacobian (mySolveMatrix, myC, -h * h);
+      }
       long tPosJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
          myB.scaledAdd (h, myC);
@@ -1275,12 +1319,13 @@ public class MechSystemSolver {
             "[gpu-assembly-profile] solver=%s backwardEuler "+
             "matrixTotal=%.3fms zero=%.3fms addVelJac=%.3fms "+
             "mulJv=%.3fms addPosJac=%.3fms addMass=%.3fms "+
-            "analyze=%.3fms solve=%.3fms analyzed=%b vsize=%d nnz=%d%n",
+            "analyze=%.3fms solve=%.3fms analyzed=%b gpuVel=%b "+
+            "gpuPos=%b vsize=%d nnz=%d%n",
             profileName(), msec(tMass-tBuildStart), msec(tZero-tBuildStart),
             msec(tVelJac-tZero), msec(tMulJv-tVelJac),
             msec(tPosJac-tMulJv), msec(tMass-tPosJac),
             msec(tAnalyze-tMass), msec(tSolve-tAnalyze), analyze,
-            vsize, mySolveMatrix.numNonZeroVals());
+            gpuVel, gpuPos, vsize, mySolveMatrix.numNonZeroVals());
       }
 
       mySys.setActiveVelState (myU); 
@@ -1724,13 +1769,18 @@ public class MechSystemSolver {
       long tVelJac = tZero;
       long tMul = tZero;
       long tPosJac = tZero;
+      boolean gpuVel = false;
+      boolean gpuPos = false;
 
       if (a0 != 0 && a1 != 0) {
          // add implicit integration terms
          myC.setSize (S.rowSize());
          myC.setZero();
 
-         mySys.addVelJacobian (S, myC, a0);
+         gpuVel = addGpuVelJacobian (S, myC, a0, "KKT velocity Jacobian");
+         if (!gpuVel) {
+            mySys.addVelJacobian (S, myC, a0);
+         }
          tVelJac = profileGpuAssembly ? System.nanoTime() : tVelJac;
          if (useFictitousJacobianForces) {
             bf.scaledAdd (-a0, myC);
@@ -1745,7 +1795,10 @@ public class MechSystemSolver {
          }
          tMul = profileGpuAssembly ? System.nanoTime() : tMul;
          myC.setZero();
-         mySys.addPosJacobian (S, myC, a1);
+         gpuPos = addGpuPosJacobian (S, myC, a1, "KKT position Jacobian");
+         if (!gpuPos) {
+            mySys.addPosJacobian (S, myC, a1);
+         }
          tPosJac = profileGpuAssembly ? System.nanoTime() : tPosJac;
 
          if (useFictitousJacobianForces) {
@@ -1774,12 +1827,12 @@ public class MechSystemSolver {
             "[gpu-assembly-profile] solver=%s kktBuild total=%.3fms "+
             "zero=%.3fms addVelJac=%.3fms mulImplicit=%.3fms "+
             "addPosJac=%.3fms addMass=%.3fms parametric=%.3fms "+
-            "velSize=%d nnz=%d%n",
+            "gpuVel=%b gpuPos=%b velSize=%d nnz=%d%n",
             profileName(), msec(tParametric-tBuildStart),
             msec(tZero-tBuildStart), msec(tVelJac-tZero),
             msec(tMul-tVelJac), msec(tPosJac-tMul),
             msec(tMass-tPosJac), msec(tParametric-tMass),
-            velSize, S.numNonZeroVals());
+            gpuVel, gpuPos, velSize, S.numNonZeroVals());
       }
 
       boolean implicitFriction = usingImplicitFriction();
