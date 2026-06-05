@@ -135,6 +135,8 @@ PointAttachable, ConnectableBody {
    protected boolean myFrameRelativeP;
    public static boolean useFrameRelativeCouplingMasses = false;
    protected boolean profileStressAndStiffness = false;
+   private static final boolean profileGpuAssembly =
+      Boolean.getBoolean ("artisynth.gpuAssembly.profile");
 
    protected PointList<FemNode3d> myNodes;
    protected ArrayList<BodyConnector> myConnectors;
@@ -167,6 +169,15 @@ PointAttachable, ConnectableBody {
    protected void timerStop(String msg) {
       timer.stop();
       System.out.println(msg + ": " + timer.result(1));
+   }
+
+   private static double msec (long nanos) {
+      return nanos/1e6;
+   }
+
+   private String profileName() {
+      String name = getName();
+      return name != null ? name : getClass().getSimpleName();
    }
 
    protected FemElement3dList<FemElement3d> myElements;
@@ -2833,6 +2844,7 @@ PointAttachable, ConnectableBody {
       if (profileStressAndStiffness) {
          timerStart();
       }
+      long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       // allocate or deallocate nodal incompressibility blocks
       setNodalIncompBlocksAllocated (getSoftIncompMethod()==IncompMethod.NODAL);
 
@@ -2874,6 +2886,7 @@ PointAttachable, ConnectableBody {
       // compute new forces as well as stiffness matrix if warping is enabled
 
       clearElementConditionInfo();
+      long tPrep = profileGpuAssembly ? System.nanoTime() : 0;
 
       double mins = Double.MAX_VALUE;
       FemElement3dBase minE = null;
@@ -2891,6 +2904,7 @@ PointAttachable, ConnectableBody {
             }
          }
       }
+      long tSolids = profileGpuAssembly ? System.nanoTime() : 0;
       for (ShellElement3d e : myShellElements) {
          FemMaterial mat = getElementMaterial(e);
          if (e.getElementClass() == ElementClass.SHELL) {
@@ -2907,6 +2921,7 @@ PointAttachable, ConnectableBody {
             }
          }
       }     
+      long tShells = profileGpuAssembly ? System.nanoTime() : 0;
 
       // incompressibility
       if ((softIncomp == IncompMethod.NODAL) && 
@@ -2914,6 +2929,7 @@ PointAttachable, ConnectableBody {
          computeNodalIncompressibility(
             (IncompressibleMaterialBase)myMaterial, D);
       }
+      long tIncomp = profileGpuAssembly ? System.nanoTime() : 0;
 
       if (checkTangentStability && minE != null) {
          System.out.println("min s=" + mins + ", element " + minE.getNumber());
@@ -2955,6 +2971,7 @@ PointAttachable, ConnectableBody {
             }
          }
       }
+      long tSym = profileGpuAssembly ? System.nanoTime() : 0;
 
       if (myComputeStrainEnergy) {
          myStrainEnergy = collectStrainEnergy();
@@ -2964,6 +2981,17 @@ PointAttachable, ConnectableBody {
       }
       myStiffnessesValidP = true;
       myStressesValidP = true;
+      if (profileGpuAssembly) {
+         long tEnd = System.nanoTime();
+         System.out.printf (
+            "[gpu-assembly-profile] fem=%s updateStressAndStiffness "+
+            "total=%.3fms prep=%.3fms solids=%.3fms shells=%.3fms "+
+            "incomp=%.3fms sym=%.3fms energy=%.3fms elems=%d shells=%d%n",
+            profileName(), msec(tEnd-tStart), msec(tPrep-tStart),
+            msec(tSolids-tPrep), msec(tShells-tSolids),
+            msec(tIncomp-tShells), msec(tSym-tIncomp), msec(tEnd-tSym),
+            myElements.size(), myShellElements.size());
+      }
       if (profileStressAndStiffness) {
          timerStop("stressAndStiffness");
       }
@@ -4033,6 +4061,7 @@ PointAttachable, ConnectableBody {
    public void addVelJacobian(
       SparseNumberedBlockMatrix M, double s) {
 
+      long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       if (!myStressesValidP || !myStiffnessesValidP) {
          updateStressAndStiffness();
       }
@@ -4050,11 +4079,20 @@ PointAttachable, ConnectableBody {
             }
          }
       }
+      if (profileGpuAssembly) {
+         long tEnd = System.nanoTime();
+         System.out.printf (
+            "[gpu-assembly-profile] fem=%s addVelJacobian total=%.3fms "+
+            "nodes=%d massDamping=%g stiffnessDamping=%g%n",
+            profileName(), msec(tEnd-tStart), myNodes.size(),
+            myMassDamping, myStiffnessDamping);
+      }
    }
 
    public void addPosJacobian(
       SparseNumberedBlockMatrix M, double s) {
 
+      long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       if (!myStressesValidP || !myStiffnessesValidP) {
          updateStressAndStiffness();
       }
@@ -4069,6 +4107,13 @@ PointAttachable, ConnectableBody {
                nbr.addPosJacobian (M, node, -s);
             }
          }
+      }
+      if (profileGpuAssembly) {
+         long tEnd = System.nanoTime();
+         System.out.printf (
+            "[gpu-assembly-profile] fem=%s addPosJacobian total=%.3fms "+
+            "nodes=%d%n",
+            profileName(), msec(tEnd-tStart), myNodes.size());
       }
    }
 

@@ -77,6 +77,8 @@ public class MechSystemSolver {
    public boolean profileWholeSolve = false;
    public boolean profileConstrainedBE = false;
    public boolean profileImplicitFriction = false;
+   private static final boolean profileGpuAssembly =
+      Boolean.getBoolean ("artisynth.gpuAssembly.profile");
    public boolean printChecksums = false;
    public boolean printPosChecksum = false;
    public boolean printVelChecksum = false;
@@ -1093,6 +1095,18 @@ public class MechSystemSolver {
       timer.start();
    }
 
+   private static double msec (long nanos) {
+      return nanos/1e6;
+   }
+
+   private String profileName() {
+      String name = null;
+      if (mySys instanceof ModelComponent) {
+         name = ((ModelComponent)mySys).getName();
+      }
+      return name != null ? name : mySys.getClass().getSimpleName();
+   }
+
    // begin timing code for the solver
    FunctionTimer factorTimer = new FunctionTimer();
    FunctionTimer solveTimer = new FunctionTimer();
@@ -1182,9 +1196,12 @@ public class MechSystemSolver {
       myF.add (myMassForces);
       myB.scaledAdd (h, myF, myB);
 
+      long tBuildStart = profileGpuAssembly ? System.nanoTime() : 0;
       mySolveMatrix.setZero();
+      long tZero = profileGpuAssembly ? System.nanoTime() : 0;
       myC.setZero ();
       mySys.addVelJacobian (mySolveMatrix, myC, -h);
+      long tVelJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
          myB.scaledAdd (h, myC);
       }
@@ -1195,9 +1212,11 @@ public class MechSystemSolver {
 
       // b += Jv v
       mySolveMatrix.mulAdd (myB, myU, vsize, vsize);
+      long tMulJv = profileGpuAssembly ? System.nanoTime() : 0;
 
       myC.setZero ();
       mySys.addPosJacobian (mySolveMatrix, myC, -h * h);
+      long tPosJac = profileGpuAssembly ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
          myB.scaledAdd (h, myC);
       }
@@ -1206,9 +1225,11 @@ public class MechSystemSolver {
       //System.out.println ("SP=\n" + S.toString("%g"));
 
       addActiveMassMatrix (mySys, mySolveMatrix);
+      long tMass = profileGpuAssembly ? System.nanoTime() : 0;
 
       //mySolveMatrix.writeToFileCRS ("solveMat_foo.txt", "%g");
 
+      long tAnalyze = tMass;
       if (mySolveMatrixVersion != myRegSolveMatrixVersion) {
          analyze = true;
       }
@@ -1219,6 +1240,9 @@ public class MechSystemSolver {
             if (myUseDirectSolver) {
                myDirectSolver.analyze (
                   mySolveMatrix, vsize, matrixType);
+               if (profileGpuAssembly) {
+                  tAnalyze = System.nanoTime();
+               }
             }
             else {
                if (!myIterativeSolver.isCompatible (matrixType)) {
@@ -1228,6 +1252,10 @@ public class MechSystemSolver {
             }
          }
       }
+      else if (profileGpuAssembly) {
+         tAnalyze = System.nanoTime();
+      }
+      long tSolve = tAnalyze;
       if (vsize != 0) {
          if (myUseDirectSolver) {
             doDirectSolve (myU, mySolveMatrix, myB);
@@ -1235,6 +1263,24 @@ public class MechSystemSolver {
          else {
             myIterativeSolver.solve (myU, mySolveMatrix, myB);
          }
+         if (profileGpuAssembly) {
+            tSolve = System.nanoTime();
+         }
+      }
+      else if (profileGpuAssembly) {
+         tSolve = System.nanoTime();
+      }
+      if (profileGpuAssembly) {
+         System.out.printf (
+            "[gpu-assembly-profile] solver=%s backwardEuler "+
+            "matrixTotal=%.3fms zero=%.3fms addVelJac=%.3fms "+
+            "mulJv=%.3fms addPosJac=%.3fms addMass=%.3fms "+
+            "analyze=%.3fms solve=%.3fms analyzed=%b vsize=%d nnz=%d%n",
+            profileName(), msec(tMass-tBuildStart), msec(tZero-tBuildStart),
+            msec(tVelJac-tZero), msec(tMulJv-tVelJac),
+            msec(tPosJac-tMulJv), msec(tMass-tPosJac),
+            msec(tAnalyze-tMass), msec(tSolve-tAnalyze), analyze,
+            vsize, mySolveMatrix.numNonZeroVals());
       }
 
       mySys.setActiveVelState (myU); 
@@ -1672,7 +1718,12 @@ public class MechSystemSolver {
 
       SparseNumberedBlockMatrix S = mySolveMatrix;      
 
+      long tBuildStart = profileGpuAssembly ? System.nanoTime() : 0;
       S.setZero();
+      long tZero = profileGpuAssembly ? System.nanoTime() : 0;
+      long tVelJac = tZero;
+      long tMul = tZero;
+      long tPosJac = tZero;
 
       if (a0 != 0 && a1 != 0) {
          // add implicit integration terms
@@ -1680,6 +1731,7 @@ public class MechSystemSolver {
          myC.setZero();
 
          mySys.addVelJacobian (S, myC, a0);
+         tVelJac = profileGpuAssembly ? System.nanoTime() : tVelJac;
          if (useFictitousJacobianForces) {
             bf.scaledAdd (-a0, myC);
             if (fpar != null && myParametricVelSize > 0) {
@@ -1691,8 +1743,10 @@ public class MechSystemSolver {
             S.mul (btmp, vel0, velSize, velSize);
             bf.scaledAdd (alpha, btmp);
          }
+         tMul = profileGpuAssembly ? System.nanoTime() : tMul;
          myC.setZero();
          mySys.addPosJacobian (S, myC, a1);
+         tPosJac = profileGpuAssembly ? System.nanoTime() : tPosJac;
 
          if (useFictitousJacobianForces) {
             bf.scaledAdd (-a0, myC);
@@ -1708,10 +1762,24 @@ public class MechSystemSolver {
       }
 
       addActiveMassMatrix (mySys, S);
+      long tMass = profileGpuAssembly ? System.nanoTime() : 0;
       if (velSize > 0 && myParametricVelSize > 0) {
          S.mulTranspose (
             btmp, myUpar, 0, velSize, velSize, myParametricVelSize);
          bf.sub (btmp);
+      }
+      long tParametric = profileGpuAssembly ? System.nanoTime() : 0;
+      if (profileGpuAssembly) {
+         System.out.printf (
+            "[gpu-assembly-profile] solver=%s kktBuild total=%.3fms "+
+            "zero=%.3fms addVelJac=%.3fms mulImplicit=%.3fms "+
+            "addPosJac=%.3fms addMass=%.3fms parametric=%.3fms "+
+            "velSize=%d nnz=%d%n",
+            profileName(), msec(tParametric-tBuildStart),
+            msec(tZero-tBuildStart), msec(tVelJac-tZero),
+            msec(tMul-tVelJac), msec(tPosJac-tMul),
+            msec(tMass-tPosJac), msec(tParametric-tMass),
+            velSize, S.numNonZeroVals());
       }
 
       boolean implicitFriction = usingImplicitFriction();

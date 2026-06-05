@@ -26,6 +26,8 @@ public class KKTSolver {
    // when building an LCP matrix, use solves with multiple right sides:
    public static boolean useBlockSolves = false;
    public static String myQPTestCaseFile = null; // "contactQP.txt";
+   private static final boolean profileGpuAssembly =
+      Boolean.getBoolean ("artisynth.gpuAssembly.profile");
 
    boolean myTimeSolves = false;
    boolean myMDiagonalP = false;
@@ -79,6 +81,10 @@ public class KKTSolver {
    };
 
    private State myState = State.NULL;
+
+   private static double msec (long nanos) {
+      return nanos/1000000.0;
+   }
 
    /**
     * Described whether or not a solution was found.
@@ -323,12 +329,14 @@ public class KKTSolver {
 
    private void getCRSValues (
       Object M, int sizeM, int numVals, SparseBlockMatrix GT, VectorNd Rg) {
+      long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       for (int i = 0; i < sizeM; i++) {
          myLocalOffs[i] = myRowOffs[i];
          if (myIndices1Based) {
             myLocalOffs[i]--;
          }
       }
+      long tOffsets = profileGpuAssembly ? System.nanoTime() : 0;
       if (M instanceof SparseBlockMatrix) {
          ((SparseBlockMatrix)M).getBlockCRSValues (
             myVals, myLocalOffs, myPartitionM, sizeM, sizeM);
@@ -340,9 +348,14 @@ public class KKTSolver {
             myVals[myLocalOffs[i]++] = diag[i];
          }
       }
+      long tMValues = profileGpuAssembly ? System.nanoTime() : 0;
+      long tGTUpper = tMValues;
+      long tGTLower = tMValues;
+      long tRg = tMValues;
+      int numG = (GT != null ? GT.colSize() : 0);
       if (GT != null) {
-         int numG = GT.colSize();
          GT.getBlockCRSValues (myVals, myLocalOffs, Partition.Full, sizeM, numG);
+         tGTUpper = profileGpuAssembly ? System.nanoTime() : tGTUpper;
          // now do the lower block(s). Reset localOffs for the lower rows
          for (int i=0; i<numG; i++) {
             myLocalOffs[i] = myRowOffs[sizeM+i];
@@ -353,7 +366,8 @@ public class KKTSolver {
          if (myPartitionM == Partition.Full) {
             GT.getBlockCCSValues (
                myVals, myLocalOffs, Partition.Full, sizeM, numG);
-         }        
+         }
+         tGTLower = profileGpuAssembly ? System.nanoTime() : tGTLower;
          // set values for lower right diagonal
          if (Rg != null) {
             double[] Rgbuf = Rg.getBuffer();
@@ -366,7 +380,20 @@ public class KKTSolver {
                myVals[myLocalOffs[i]++] = 0;
             }
          }
-      }      
+         tRg = profileGpuAssembly ? System.nanoTime() : tRg;
+      }
+      if (profileGpuAssembly) {
+         long tEnd = System.nanoTime();
+         System.out.printf (
+            "[gpu-assembly-profile] kktCrs total=%.3fms offsets=%.3fms "+
+            "M=%.3fms GTupper=%.3fms GTlower=%.3fms Rg=%.3fms "+
+            "sizeM=%d numG=%d nnz=%d matrix=%s%n",
+            msec (tEnd-tStart), msec (tOffsets-tStart),
+            msec (tMValues-tOffsets), msec (tGTUpper-tMValues),
+            msec (tGTLower-tGTUpper), msec (tRg-tGTLower),
+            sizeM, numG, numVals,
+            M instanceof SparseBlockMatrix ? "SparseBlockMatrix" : "VectorNd");
+      }
    }
 
    /**
