@@ -29,6 +29,11 @@ public interface MechSystem {
    public static class GpuAssemblyContext {
       private SparseNumberedBlockMatrix myMatrix;
       private SparseNumberedBlockMatrix.CrsBlockSlotMap mySlotMap;
+      private double[] myCrsValues;
+      private int[] myCrsColIdxs;
+      private int[] myCrsRowOffs;
+      private int[] myZeroBasedCrsColIdxs;
+      private int[] myZeroBasedCrsRowOffs;
       private int myStructureVersion;
 
       public GpuAssemblyContext (
@@ -38,6 +43,13 @@ public interface MechSystem {
          myMatrix = matrix;
          mySlotMap = slotMap;
          myStructureVersion = structureVersion;
+         int numVals = slotMap.numVals();
+         myCrsValues = new double[numVals];
+         myCrsColIdxs = new int[numVals];
+         myCrsRowOffs = new int[slotMap.rowSize()+1];
+         matrix.getCRSIndices (
+            myCrsColIdxs, myCrsRowOffs, Matrix.Partition.Full,
+            slotMap.rowSize(), slotMap.colSize());
       }
 
       public SparseNumberedBlockMatrix getMatrix() {
@@ -46,6 +58,50 @@ public interface MechSystem {
 
       public SparseNumberedBlockMatrix.CrsBlockSlotMap getSlotMap() {
          return mySlotMap;
+      }
+
+      public double[] getCrsValues() {
+         return myCrsValues;
+      }
+
+      public void clearCrsValues() {
+         Arrays.fill (myCrsValues, 0);
+      }
+
+      /**
+       * Returns 1-based CRS column indices, matching the public maspack CRS
+       * export convention.
+       */
+      public int[] getCrsColIdxs() {
+         return myCrsColIdxs;
+      }
+
+      /**
+       * Returns 1-based CRS row offsets, matching the public maspack CRS export
+       * convention.
+       */
+      public int[] getCrsRowOffs() {
+         return myCrsRowOffs;
+      }
+
+      public int[] getZeroBasedCrsColIdxs() {
+         if (myZeroBasedCrsColIdxs == null) {
+            myZeroBasedCrsColIdxs = myCrsColIdxs.clone();
+            for (int i=0; i<myZeroBasedCrsColIdxs.length; i++) {
+               myZeroBasedCrsColIdxs[i]--;
+            }
+         }
+         return myZeroBasedCrsColIdxs;
+      }
+
+      public int[] getZeroBasedCrsRowOffs() {
+         if (myZeroBasedCrsRowOffs == null) {
+            myZeroBasedCrsRowOffs = myCrsRowOffs.clone();
+            for (int i=0; i<myZeroBasedCrsRowOffs.length; i++) {
+               myZeroBasedCrsRowOffs[i]--;
+            }
+         }
+         return myZeroBasedCrsRowOffs;
       }
 
       public int getStructureVersion() {

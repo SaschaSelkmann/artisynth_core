@@ -560,49 +560,6 @@ public class FemModel3dTest extends UnitTest {
       }
    }
 
-   private void addVelJacobianCrsValues (
-      FemModel3d fem, double[] vals,
-      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap, double s) {
-
-      if (!fem.myStressesValidP || !fem.myStiffnessesValidP) {
-         fem.updateStressAndStiffness();
-      }
-      double sm = -s*fem.myMassDamping;
-      double sk = -s*fem.myStiffnessDamping;
-      for (int i=0; i<fem.myNodes.size(); i++) {
-         FemNode3d node = fem.myNodes.get(i);
-         if (node.getLocalSolveIndex() != -1) {
-            for (FemNodeNeighbor nbr : fem.getNodeNeighbors(node)) {
-               nbr.addVelJacobian (
-                  vals, slotMap, node, sm, sk, fem.myUseConsistentMass);
-            }
-            for (FemNodeNeighbor nbr : fem.getIndirectNeighbors(node)) {
-               nbr.addVelJacobian (vals, slotMap, node, sm, sk, false);
-            }
-         }
-      }
-   }
-
-   private void addPosJacobianCrsValues (
-      FemModel3d fem, double[] vals,
-      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap, double s) {
-
-      if (!fem.myStressesValidP || !fem.myStiffnessesValidP) {
-         fem.updateStressAndStiffness();
-      }
-      for (int i=0; i<fem.myNodes.size(); i++) {
-         FemNode3d node = fem.myNodes.get(i);
-         if (node.getLocalSolveIndex() != -1) {
-            for (FemNodeNeighbor nbr : fem.getNodeNeighbors(node)) {
-               nbr.addPosJacobian (vals, slotMap, node, -s);
-            }
-            for (FemNodeNeighbor nbr : fem.getIndirectNeighbors(node)) {
-               nbr.addPosJacobian (vals, slotMap, node, -s);
-            }
-         }
-      }
-   }
-
    private void testFemNeighborCrsAssembly() {
       FemModel3d fem =
          FemFactory.createTetGrid (null, 1.0, 0.8, 0.6, 1, 1, 1);
@@ -617,20 +574,25 @@ public class FemModel3dTest extends UnitTest {
       mech.buildSolveMatrix (M);
       SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
          M.createCrsBlockSlotMap (Matrix.Partition.Full);
+      MechSystem.GpuAssemblyContext context =
+         new MechSystem.GpuAssemblyContext (
+            M, slotMap, mech.getStructureVersion());
 
-      double[] vals = new double[M.numNonZeroVals()];
       double s = -0.03;
       M.setZero();
       fem.addVelJacobian (M, s);
-      addVelJacobianCrsValues (fem, vals, slotMap, s);
-      checkCrsValuesEqual ("velocity Jacobian CRS assembly", vals, M);
+      context.clearCrsValues();
+      fem.addVelJacobianCrsValues (context, s);
+      checkCrsValuesEqual (
+         "velocity Jacobian CRS assembly", context.getCrsValues(), M);
 
-      vals = new double[M.numNonZeroVals()];
       s = -0.0009;
       M.setZero();
       fem.addPosJacobian (M, s);
-      addPosJacobianCrsValues (fem, vals, slotMap, s);
-      checkCrsValuesEqual ("position Jacobian CRS assembly", vals, M);
+      context.clearCrsValues();
+      fem.addPosJacobianCrsValues (context, s);
+      checkCrsValuesEqual (
+         "position Jacobian CRS assembly", context.getCrsValues(), M);
    }
 
    void checkNumbering (FemModel3d fem, boolean zeroBased) {

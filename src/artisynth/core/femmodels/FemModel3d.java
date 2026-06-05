@@ -34,6 +34,7 @@ import artisynth.core.mechmodels.DynamicAttachmentWorker;
 import artisynth.core.mechmodels.DynamicComponent;
 import artisynth.core.mechmodels.Frame;
 import artisynth.core.mechmodels.HasSurfaceMesh;
+import artisynth.core.mechmodels.MechSystem;
 import artisynth.core.mechmodels.MechSystemBase;
 import artisynth.core.mechmodels.MeshComponent;
 import artisynth.core.mechmodels.MeshComponentList;
@@ -4089,6 +4090,37 @@ PointAttachable, ConnectableBody {
       }
    }
 
+   public void addVelJacobianCrsValues (
+      double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      double s) {
+
+      if (!myStressesValidP || !myStiffnessesValidP) {
+         updateStressAndStiffness();
+      }
+      double sm = -s*myMassDamping;
+      double sk = -s*myStiffnessDamping;
+      for (int i = 0; i < myNodes.size(); i++) {
+         FemNode3d node = myNodes.get(i);
+         if (node.getLocalSolveIndex() != -1) {
+            for (FemNodeNeighbor nbr : getNodeNeighbors(node)) {
+               nbr.addVelJacobian (
+                  vals, slotMap, node, sm, sk, myUseConsistentMass);
+            }
+            // used for soft nodal-based incompressibilty:
+            for (FemNodeNeighbor nbr : getIndirectNeighbors(node)) {
+               nbr.addVelJacobian (vals, slotMap, node, sm, sk, false);
+            }
+         }
+      }
+   }
+
+   public void addVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      addVelJacobianCrsValues (
+         context.getCrsValues(), context.getSlotMap(), s);
+   }
+
    public void addPosJacobian(
       SparseNumberedBlockMatrix M, double s) {
 
@@ -4115,6 +4147,34 @@ PointAttachable, ConnectableBody {
             "nodes=%d%n",
             profileName(), msec(tEnd-tStart), myNodes.size());
       }
+   }
+
+   public void addPosJacobianCrsValues (
+      double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      double s) {
+
+      if (!myStressesValidP || !myStiffnessesValidP) {
+         updateStressAndStiffness();
+      }
+      for (int i = 0; i < myNodes.size(); i++) {
+         FemNode3d node = myNodes.get(i);
+         if (node.getLocalSolveIndex() != -1) {
+            for (FemNodeNeighbor nbr : getNodeNeighbors(node)) {
+               nbr.addPosJacobian (vals, slotMap, node, -s);
+            }
+            // used for soft nodal-based incompressibilty:
+            for (FemNodeNeighbor nbr : getIndirectNeighbors(node)) {
+               nbr.addPosJacobian (vals, slotMap, node, -s);
+            }
+         }
+      }
+   }
+
+   public void addPosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      addPosJacobianCrsValues (
+         context.getCrsValues(), context.getSlotMap(), s);
    }
 
    protected double checkMatrixStability(DenseMatrix D) {
