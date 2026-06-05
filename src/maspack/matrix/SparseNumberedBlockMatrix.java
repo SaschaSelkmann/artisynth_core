@@ -16,6 +16,114 @@ import maspack.util.TestException;
  */
 public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
 
+   /**
+    * Maps numbered matrix block entries to their corresponding positions in a
+    * CRS values array. Entries within each block are ordered in the same
+    * row-major structural order used by {@link MatrixBlock#getBlockCRSValues}.
+    */
+   public static class CrsBlockSlotMap {
+      private Partition myPart;
+      private int myNumRows;
+      private int myNumCols;
+      private int myNumVals;
+      private int[] myBlockOffs;
+      private int[] mySlots;
+
+      CrsBlockSlotMap (
+         Partition part, int numRows, int numCols, int numVals,
+         int[] blockOffs, int[] slots) {
+         myPart = part;
+         myNumRows = numRows;
+         myNumCols = numCols;
+         myNumVals = numVals;
+         myBlockOffs = blockOffs;
+         mySlots = slots;
+      }
+
+      public Partition getPartition() {
+         return myPart;
+      }
+
+      public int rowSize() {
+         return myNumRows;
+      }
+
+      public int colSize() {
+         return myNumCols;
+      }
+
+      public int numVals() {
+         return myNumVals;
+      }
+
+      public int numMappedBlockValues() {
+         return mySlots.length;
+      }
+
+      public int getBlockSlotOffset (int blockNumber) {
+         checkBlockNumber (blockNumber);
+         return myBlockOffs[blockNumber];
+      }
+
+      public int numBlockSlots (int blockNumber) {
+         checkBlockNumber (blockNumber);
+         return myBlockOffs[blockNumber+1] - myBlockOffs[blockNumber];
+      }
+
+      public int getBlockSlot (int blockNumber, int localSlotIdx) {
+         checkBlockNumber (blockNumber);
+         int off = myBlockOffs[blockNumber];
+         int nextOff = myBlockOffs[blockNumber+1];
+         if (localSlotIdx < 0 || off + localSlotIdx >= nextOff) {
+            throw new IllegalArgumentException (
+               "local slot index "+localSlotIdx+" out of range");
+         }
+         return mySlots[off + localSlotIdx];
+      }
+
+      public int getBlockValueSlot (MatrixBlock blk, int i, int j) {
+         Partition blkPart = blockPartition (blk);
+         if (blkPart == Partition.None || !isStoredEntry (blk, i, j, blkPart)) {
+            return -1;
+         }
+         int localSlotIdx = localSlotIndex (blk, i, j, blkPart);
+         return getBlockSlot (blk.getBlockNumber(), localSlotIdx);
+      }
+
+      public int[] getSlots() {
+         return Arrays.copyOf (mySlots, mySlots.length);
+      }
+
+      private void checkBlockNumber (int blockNumber) {
+         if (blockNumber < 0 || blockNumber + 1 >= myBlockOffs.length) {
+            throw new IllegalArgumentException (
+               "block number "+blockNumber+" out of range");
+         }
+      }
+
+      private Partition blockPartition (MatrixBlock blk) {
+         int bi = blk.getBlockRow();
+         int bj = blk.getBlockCol();
+         if (myPart == Partition.Full) {
+            return Partition.Full;
+         }
+         else if (myPart == Partition.UpperTriangular) {
+            if (bj == bi) {
+               return Partition.UpperTriangular;
+            }
+            else if (bj > bi) {
+               return Partition.Full;
+            }
+            else {
+               return Partition.None;
+            }
+         }
+         else {
+            return Partition.None;
+         }
+      }
+   }
+
    // code to implement the number map
                                                
    protected MatrixBlock[] myNumberMap;
@@ -24,6 +132,74 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
    protected int[] myFreeNumbers;
    protected int myNumFreeNumbers;
    protected int myInitialCapacity = -1;
+
+   private static boolean isStoredEntry (
+      MatrixBlock blk, int i, int j, Partition part) {
+      if (i < 0 || i >= blk.rowSize() || j < 0 || j >= blk.colSize()) {
+         throw new IllegalArgumentException (
+            "block entry ("+i+","+j+") out of range");
+      }
+      if (part == Partition.UpperTriangular && j < i) {
+         return false;
+      }
+      else if (part != Partition.Full && part != Partition.UpperTriangular) {
+         return false;
+      }
+      return blk.valueIsNonZero (i, j);
+   }
+
+   private static int numStoredEntries (MatrixBlock blk, Partition part) {
+      int num = 0;
+      if (part == Partition.None) {
+         return 0;
+      }
+      for (int i=0; i<blk.rowSize(); i++) {
+         for (int j=0; j<blk.colSize(); j++) {
+            if (isStoredEntry (blk, i, j, part)) {
+               num++;
+            }
+         }
+      }
+      return num;
+   }
+
+   private static int localSlotIndex (
+      MatrixBlock blk, int i, int j, Partition part) {
+      int idx = 0;
+      for (int ii=0; ii<blk.rowSize(); ii++) {
+         for (int jj=0; jj<blk.colSize(); jj++) {
+            if (isStoredEntry (blk, ii, jj, part)) {
+               if (ii == i && jj == j) {
+                  return idx;
+               }
+               idx++;
+            }
+         }
+      }
+      return -1;
+   }
+
+   private static Partition blockPartition (
+      MatrixBlock blk, Partition part) {
+      int bi = blk.getBlockRow();
+      int bj = blk.getBlockCol();
+      if (part == Partition.Full) {
+         return Partition.Full;
+      }
+      else if (part == Partition.UpperTriangular) {
+         if (bj == bi) {
+            return Partition.UpperTriangular;
+         }
+         else if (bj > bi) {
+            return Partition.Full;
+         }
+         else {
+            return Partition.None;
+         }
+      }
+      throw new UnsupportedOperationException (
+         "Matrix partition "+part+" not supported");
+   }
 
    private int allocNumber() {
       int num;
@@ -169,6 +345,88 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
 
    public MatrixBlock getBlockByNumber (int num) {
       return myNumberMap[num];
+   }
+
+   /**
+    * Builds a mapping from numbered matrix blocks to CRS value-array slots for
+    * a principal block-aligned sub-matrix. The CRS slot numbering is 0-based,
+    * matching the values array returned by {@link #getCRSValues}.
+    *
+    * @param part matrix partition to map
+    * @param numRows number of rows delimiting the sub-matrix
+    * @param numCols number of columns delimiting the sub-matrix
+    * @return block-to-CRS slot map
+    */
+   public CrsBlockSlotMap createCrsBlockSlotMap (
+      Partition part, int numRows, int numCols) {
+
+      if (part != Partition.Full && part != Partition.UpperTriangular) {
+         throw new UnsupportedOperationException (
+            "Matrix partition "+part+" not supported");
+      }
+      int numBlkRows = getAlignedBlockRow (numRows);
+      int numBlkCols = getAlignedBlockCol (numCols);
+      if (numRows > rowSize() || numCols > colSize()) {
+         throw new IllegalArgumentException (
+            "submatrix exceeds "+getSize()+" matrix size");
+      }
+      if (numBlkRows == -1 || numBlkCols == -1) {
+         throw new IllegalArgumentException (
+            "submatrix is not block aligned");
+      }
+
+      int numVals = numNonZeroVals (part, numRows, numCols);
+      int[] colIdxs = new int[numVals];
+      int[] rowOffs = new int[numRows+1];
+      getCRSIndices (colIdxs, rowOffs, part, numRows, numCols);
+      for (int i=0; i<rowOffs.length; i++) {
+         rowOffs[i]--;
+      }
+
+      int[] blockOffs = new int[myMaxNumber+1];
+      for (int bi=0; bi<numBlkRows; bi++) {
+         for (MatrixBlock blk=myRows[bi].myHead;
+              blk != null && blk.getBlockCol() < numBlkCols;
+              blk=blk.next()) {
+            int num = blk.getBlockNumber();
+            blockOffs[num+1] = numStoredEntries (
+               blk, blockPartition (blk, part));
+         }
+      }
+      for (int i=0; i<myMaxNumber; i++) {
+         blockOffs[i+1] += blockOffs[i];
+      }
+
+      int[] nextBlockOffs = Arrays.copyOf (blockOffs, blockOffs.length);
+      int[] nextRowOffs = Arrays.copyOf (rowOffs, rowOffs.length);
+      int[] slots = new int[blockOffs[myMaxNumber]];
+
+      for (int bi=0; bi<numBlkRows; bi++) {
+         int rowBase = myRowOffsets[bi];
+         for (MatrixBlock blk=myRows[bi].myHead;
+              blk != null && blk.getBlockCol() < numBlkCols;
+              blk=blk.next()) {
+            Partition blkPart = blockPartition (blk, part);
+            if (blkPart == Partition.None) {
+               continue;
+            }
+            int num = blk.getBlockNumber();
+            for (int i=0; i<blk.rowSize(); i++) {
+               for (int j=0; j<blk.colSize(); j++) {
+                  if (isStoredEntry (blk, i, j, blkPart)) {
+                     slots[nextBlockOffs[num]++] = nextRowOffs[rowBase+i]++;
+                  }
+               }
+            }
+         }
+      }
+
+      return new CrsBlockSlotMap (
+         part, numRows, numCols, numVals, blockOffs, slots);
+   }
+
+   public CrsBlockSlotMap createCrsBlockSlotMap (Partition part) {
+      return createCrsBlockSlotMap (part, rowSize(), colSize());
    }
 
    String getBlockStr (MatrixBlock blk) {

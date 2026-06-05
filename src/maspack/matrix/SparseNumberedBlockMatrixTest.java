@@ -96,8 +96,105 @@ public class SparseNumberedBlockMatrixTest extends SparseBlockMatrixTest {
       testAddBlock (S, 1, 7, new Matrix3x4Block());
    }
 
+   private void setUniqueValues (SparseNumberedBlockMatrix S) {
+      for (int bi=0; bi<S.numBlockRows(); bi++) {
+         for (MatrixBlock blk=S.firstBlockInRow(bi);
+              blk!=null; blk=blk.next()) {
+            int bnum = blk.getBlockNumber();
+            for (int i=0; i<blk.rowSize(); i++) {
+               for (int j=0; j<blk.colSize(); j++) {
+                  if (blk.valueIsNonZero (i, j)) {
+                     blk.set (i, j, 1000*bnum + 100*i + j + 1);
+                  }
+               }
+            }
+         }
+      }
+   }
+
+   private void checkCrsBlockSlotMap (
+      SparseNumberedBlockMatrix S, Matrix.Partition part) {
+
+      int nvals = S.numNonZeroVals (part, S.rowSize(), S.colSize());
+      double[] vals = new double[nvals];
+      S.getCRSValues (vals, part, S.rowSize(), S.colSize());
+      SparseNumberedBlockMatrix.CrsBlockSlotMap map =
+         S.createCrsBlockSlotMap (part);
+      boolean[] seen = new boolean[nvals];
+      int nseen = 0;
+
+      if (map.numVals() != nvals) {
+         throw new TestException (
+            "slot map has "+map.numVals()+" values, expected "+nvals);
+      }
+      if (map.numMappedBlockValues() != nvals) {
+         throw new TestException (
+            "slot map has "+map.numMappedBlockValues()+
+            " mapped block values, expected "+nvals);
+      }
+
+      for (int bi=0; bi<S.numBlockRows(); bi++) {
+         for (MatrixBlock blk=S.firstBlockInRow(bi);
+              blk!=null; blk=blk.next()) {
+            int bnum = blk.getBlockNumber();
+            int expectedSlots = 0;
+            for (int i=0; i<blk.rowSize(); i++) {
+               for (int j=0; j<blk.colSize(); j++) {
+                  int slot = map.getBlockValueSlot (blk, i, j);
+                  if (slot != -1) {
+                     expectedSlots++;
+                     if (slot < 0 || slot >= nvals) {
+                        throw new TestException (
+                           "slot "+slot+" out of range for block "+bnum);
+                     }
+                     if (seen[slot]) {
+                        throw new TestException (
+                           "slot "+slot+" mapped more than once");
+                     }
+                     seen[slot] = true;
+                     nseen++;
+                     if (vals[slot] != blk.get (i, j)) {
+                        throw new TestException (
+                           "bad slot value for block "+bnum+
+                           " entry ("+i+","+j+"): got "+vals[slot]+
+                           ", expected "+blk.get(i,j));
+                     }
+                  }
+               }
+            }
+            if (map.numBlockSlots (bnum) != expectedSlots) {
+               throw new TestException (
+                  "block "+bnum+" has "+map.numBlockSlots(bnum)+
+                  " slots, expected "+expectedSlots);
+            }
+         }
+      }
+      if (nseen != nvals) {
+         throw new TestException (
+            "slot map covered "+nseen+" values, expected "+nvals);
+      }
+   }
+
+   void testCrsBlockSlotMap() {
+      int[] sizes = new int[] { 2, 3, 3, 4 };
+      SparseNumberedBlockMatrix S = createMatrix (sizes, sizes);
+      S.addBlock (0, 0, new Matrix2x2Block());
+      S.addBlock (0, 1, new Matrix2x3Block());
+      S.addBlock (1, 0, new Matrix3x2Block());
+      S.addBlock (1, 1, new Matrix3x3DiagBlock());
+      S.addBlock (1, 2, new Matrix3x3Block());
+      S.addBlock (2, 1, new Matrix3x3Block());
+      S.addBlock (2, 2, new Matrix3x3DiagBlock());
+      S.addBlock (2, 3, new Matrix3x4Block());
+      S.addBlock (3, 3, new MatrixNdBlock (4, 4));
+      setUniqueValues (S);
+      checkCrsBlockSlotMap (S, Matrix.Partition.Full);
+      checkCrsBlockSlotMap (S, Matrix.Partition.UpperTriangular);
+   }
+
    public void test() {
       testAddBlock ();
+      testCrsBlockSlotMap();
       super.test();
       SparseBlockMatrix.warningLevel = 0;
       specialTest (0);
