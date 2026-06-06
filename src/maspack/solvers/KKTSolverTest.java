@@ -850,6 +850,60 @@ public class KKTSolverTest {
       cudss.dispose();
    }
 
+   public void testCuDssKktDeviceValues() {
+      if (!CuDssSolver.isAvailable()) {
+         return;
+      }
+      boolean oldEnable = KKTSolver.getKktDeviceValuesEnabled();
+      KKTSolver.setKktDeviceValuesEnabled (true);
+      try {
+         RandomGenerator.setSeed (0x8912);
+         MatrixNdBlock Mblk = new MatrixNdBlock (6, 6);
+         MatrixNdBlock GTblk = new MatrixNdBlock (6, 3);
+         GTblk.setRandom();
+         Mblk.setRandom();
+         Mblk.mulTranspose (Mblk);
+         SparseBlockMatrix M = new SparseBlockMatrix();
+         M.addBlock (0, 0, Mblk);
+         SparseBlockMatrix GT = new SparseBlockMatrix();
+         GT.addBlock (0, 0, GTblk);
+
+         VectorNd Rg = new VectorNd (3);
+         VectorNd bm = new VectorNd (6);
+         VectorNd bg = new VectorNd (3);
+         Rg.setRandom();
+         Rg.absolute();
+         bm.setRandom();
+         bg.setRandom();
+
+         KKTSolver pardiso = new KKTSolver (SparseSolverId.Pardiso);
+         pardiso.analyze (M, 6, GT, Rg, Matrix.SYMMETRIC);
+         pardiso.factor (M, 6, GT, Rg);
+         VectorNd velP = new VectorNd (6);
+         VectorNd lamP = new VectorNd (3);
+         pardiso.solve (velP, lamP, bm, bg);
+         pardiso.dispose();
+
+         KKTSolver cudss = new KKTSolver (SparseSolverId.CuDss);
+         cudss.analyze (M, 6, GT, Rg, Matrix.SYMMETRIC);
+         cudss.factor (M, 6, GT, Rg);
+         if (!cudss.lastFactorUsedDeviceValues()) {
+            throw new TestException (
+               "cuDSS KKT factor did not use device values");
+         }
+         VectorNd velC = new VectorNd (6);
+         VectorNd lamC = new VectorNd (3);
+         cudss.solve (velC, lamC, bm, bg);
+         cudss.dispose();
+
+         requireClose ("kkt device values vel", velC, velP, 1e-8);
+         requireClose ("kkt device values lam", lamC, lamP, 1e-8);
+      }
+      finally {
+         KKTSolver.setKktDeviceValuesEnabled (oldEnable);
+      }
+   }
+
    public static void main (String[] args) {
       KKTSolverTest tester = new KKTSolverTest();
       PardisoSolver.printThreadInfo = false;
@@ -860,6 +914,7 @@ public class KKTSolverTest {
          tester.testKktMBlockSlotMap();
          tester.testCuDssEquality();
          tester.testCuDssRefactor();
+         tester.testCuDssKktDeviceValues();
       }
       catch (Exception e) {
          e.printStackTrace();

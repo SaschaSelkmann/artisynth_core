@@ -2539,6 +2539,12 @@ public class MechSystemSolver {
                }
                myKKTSolver.factorAndSolve (
                   S, velSize, myGT, myRg, vel, myLam, bf, myBg, myHybridSolveTol);
+               maybeReportGpuAssemblyStatus (
+                  "kktFactor", false,
+                  myKKTSolver.lastFactorUsedDeviceValues(),
+                  myKKTSolver.lastFactorUsedDeviceValues() ?
+                     "kktDeviceValues" : "kktHostValues",
+                  velSize + myGsize);
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStop ("    KKT solve: factorAndSolve(hybrid)", myKKTTimer);
                }
@@ -2548,6 +2554,12 @@ public class MechSystemSolver {
                   timerStart (myKKTTimer);
                }
                myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
+               maybeReportGpuAssemblyStatus (
+                  "kktFactor", false,
+                  myKKTSolver.lastFactorUsedDeviceValues(),
+                  myKKTSolver.lastFactorUsedDeviceValues() ?
+                     "kktDeviceValues" : "kktHostValues",
+                  velSize + myGsize);
                myKKTSolver.solve (vel, myLam, myThe, bf, myBg, myBn);
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStop ("    KKT solve: factor and solve", myKKTTimer);
@@ -3692,9 +3704,21 @@ public class MechSystemSolver {
       if (myHybridSolveP && !analyze && myNT.colSize() == 0) {
          myKKTSolver.factorAndSolve (
             S, velSize, myGT, myRg, vel, myLam, myBf, myBg, myHybridSolveTol);
+         maybeReportGpuAssemblyStatus (
+            "kktFactor", false,
+            myKKTSolver.lastFactorUsedDeviceValues(),
+            myKKTSolver.lastFactorUsedDeviceValues() ?
+               "kktDeviceValues" : "kktHostValues",
+            velSize + myGsize);
       }
       else {
          myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
+         maybeReportGpuAssemblyStatus (
+            "kktFactor", false,
+            myKKTSolver.lastFactorUsedDeviceValues(),
+            myKKTSolver.lastFactorUsedDeviceValues() ?
+               "kktDeviceValues" : "kktHostValues",
+            velSize + myGsize);
          myKKTSolver.solve (vel, myLam, myThe, myBf, myBg, myBn);
       }
       if (computeKKTResidual) {

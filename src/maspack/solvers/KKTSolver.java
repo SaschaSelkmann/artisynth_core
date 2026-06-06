@@ -28,6 +28,8 @@ public class KKTSolver {
    public static String myQPTestCaseFile = null; // "contactQP.txt";
    private static boolean myGpuAssemblyProfilingEnabled =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
+   private static boolean myKktDeviceValuesEnabled =
+      Boolean.getBoolean ("artisynth.gpuAssembly.kktDeviceValues");
 
    public static boolean getGpuAssemblyProfilingEnabled() {
       return myGpuAssemblyProfilingEnabled;
@@ -35,6 +37,14 @@ public class KKTSolver {
 
    public static void setGpuAssemblyProfilingEnabled (boolean enable) {
       myGpuAssemblyProfilingEnabled = enable;
+   }
+
+   public static boolean getKktDeviceValuesEnabled() {
+      return myKktDeviceValuesEnabled;
+   }
+
+   public static void setKktDeviceValuesEnabled (boolean enable) {
+      myKktDeviceValuesEnabled = enable;
    }
 
    boolean myTimeSolves = false;
@@ -56,6 +66,7 @@ public class KKTSolver {
    DirectSolver myMatrixSolver;
    boolean myIndices1Based = false;
    boolean myLastSolveWasIterative = false;
+   boolean myLastFactorUsedDeviceValues = false;
 
    DantzigLCPSolver myDantzig = new DantzigLCPSolver();
    MurtyLCPSolver myMurty = new MurtyLCPSolver();
@@ -71,6 +82,7 @@ public class KKTSolver {
 
    int[] myLocalOffs = new int[0];
    double[] myVals = new double[0];
+   int[] myValueSlots = new int[0];
 
    VectorNd myMGx = new VectorNd();
    VectorNd myMGy = new VectorNd();
@@ -197,6 +209,12 @@ public class KKTSolver {
          myColIdxs = new int[numVals];
          myVals = new double[numVals];
       }
+      if (numVals > myValueSlots.length) {
+         myValueSlots = new int[numVals];
+         for (int i=0; i<numVals; i++) {
+            myValueSlots[i] = i;
+         }
+      }
       // store for later ...
       mySizeM = sizeM;
       myNumG = numG;
@@ -267,6 +285,10 @@ public class KKTSolver {
 
    public SparseNumberedBlockMatrix.CrsBlockSlotMap getKktMBlockSlotMap() {
       return myKktMBlockSlotMap;
+   }
+
+   public boolean lastFactorUsedDeviceValues() {
+      return myLastFactorUsedDeviceValues;
    }
 
    double[] getCRSValuesForTesting() {
@@ -1781,6 +1803,7 @@ public class KKTSolver {
    private void factorMG (
       Object M, int sizeM, SparseBlockMatrix GT, VectorNd Rg) {
       getCRSValues (M, sizeM, myNumVals, GT, Rg);
+      myLastFactorUsedDeviceValues = false;
       if (mySolverType == SparseSolverId.Umfpack) {
          loadUmfpackValues (mySizeM + myNumG, myNumVals);
          int status = myUmfpack.factorValues (myUmfpackVals);
@@ -1793,7 +1816,15 @@ public class KKTSolver {
          }
       }
       else {
-         myMatrixSolver.factor (myVals);
+         if (myCuDss != null && myKktDeviceValuesEnabled) {
+            myCuDss.clearDeviceValues();
+            myCuDss.addDeviceValues (myValueSlots, myVals, myNumVals, 1.0);
+            myCuDss.factorDeviceValues();
+            myLastFactorUsedDeviceValues = true;
+         }
+         else {
+            myMatrixSolver.factor (myVals);
+         }
          if (myPardiso != null && myPardiso.getState() != PardisoSolver.FACTORED) {
             // PARDISO doesn't throw on factor failure; check state.
             // cuDSS throws from inside factor() so by this point it's fine.

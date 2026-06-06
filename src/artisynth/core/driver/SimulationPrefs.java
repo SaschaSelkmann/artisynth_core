@@ -73,6 +73,9 @@ public class SimulationPrefs extends Preferences {
    private boolean myGpuAssemblyProfiling =
       SimulationSettings.DEFAULT_GPU_ASSEMBLY_PROFILING;
 
+   private boolean myGpuAssemblyKktDeviceValues =
+      SimulationSettings.DEFAULT_GPU_ASSEMBLY_KKT_DEVICE_VALUES;
+
    private boolean myCuDssTiming =
       SimulationSettings.DEFAULT_CUDSS_TIMING;
 
@@ -156,6 +159,14 @@ public class SimulationPrefs extends Preferences {
       myGpuAssemblyProfiling = enable;
    }
 
+   public boolean getGpuAssemblyKktDeviceValues () {
+      return myGpuAssemblyKktDeviceValues;
+   }
+
+   public void setGpuAssemblyKktDeviceValues (boolean enable) {
+      myGpuAssemblyKktDeviceValues = enable;
+   }
+
    public boolean getCuDssTiming () {
       return myCuDssTiming;
    }
@@ -200,6 +211,8 @@ public class SimulationPrefs extends Preferences {
       setMatrixSolver (mySettings.getMatrixSolver());
       setGpuAssemblyStatus (mySettings.getGpuAssemblyStatus());
       setGpuAssemblyProfiling (mySettings.getGpuAssemblyProfiling());
+      setGpuAssemblyKktDeviceValues (
+         mySettings.getGpuAssemblyKktDeviceValues());
       setCuDssTiming (mySettings.getCuDssTiming());
    }
 
@@ -215,6 +228,8 @@ public class SimulationPrefs extends Preferences {
       mySettings.setMatrixSolver (getMatrixSolver());
       mySettings.setGpuAssemblyStatus (getGpuAssemblyStatus());
       mySettings.setGpuAssemblyProfiling (getGpuAssemblyProfiling());
+      mySettings.setGpuAssemblyKktDeviceValues (
+         getGpuAssemblyKktDeviceValues());
       mySettings.setCuDssTiming (getCuDssTiming());
 
       if (mySettings.getDialog() != null) {

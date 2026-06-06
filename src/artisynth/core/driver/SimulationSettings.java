@@ -55,6 +55,9 @@ public class SimulationSettings extends SettingsBase {
    public static final boolean DEFAULT_GPU_ASSEMBLY_PROFILING =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
 
+   public static final boolean DEFAULT_GPU_ASSEMBLY_KKT_DEVICE_VALUES =
+      Boolean.getBoolean ("artisynth.gpuAssembly.kktDeviceValues");
+
    public static final boolean DEFAULT_CUDSS_TIMING =
       Boolean.getBoolean ("artisynth.cudss.timing");
 
@@ -103,6 +106,10 @@ public class SimulationSettings extends SettingsBase {
          "gpuAssemblyProfiling",
          "print detailed GPU assembly timing diagnostics",
          DEFAULT_GPU_ASSEMBLY_PROFILING);
+      myProps.add (
+         "gpuAssemblyKktDeviceValues",
+         "factor cuDSS KKT systems from device CRS values",
+         DEFAULT_GPU_ASSEMBLY_KKT_DEVICE_VALUES);
       myProps.add (
          "cuDssTiming",
          "print cuDSS factor/solve timing diagnostics",
@@ -208,6 +215,14 @@ public class SimulationSettings extends SettingsBase {
    public void setGpuAssemblyProfiling (boolean enable) {
       MechSystemSolver.setGpuAssemblyProfilingEnabled (enable);
       KKTSolver.setGpuAssemblyProfilingEnabled (enable);
+   }
+
+   public boolean getGpuAssemblyKktDeviceValues () {
+      return KKTSolver.getKktDeviceValuesEnabled();
+   }
+
+   public void setGpuAssemblyKktDeviceValues (boolean enable) {
+      KKTSolver.setKktDeviceValuesEnabled (enable);
    }
 
    public boolean getCuDssTiming () {

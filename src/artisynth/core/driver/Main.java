@@ -1736,6 +1736,14 @@ public class Main implements DriverInterface, ComponentChangeListener {
       }
       mySimulationSettings.setGpuAssemblyProfiling (profilingEnabled);
 
+      boolean kktDeviceValuesEnabled =
+         mySimulationPrefs.getGpuAssemblyKktDeviceValues();
+      if (gpuAssemblyKktDeviceValues.value) {
+         kktDeviceValuesEnabled = true;
+      }
+      mySimulationSettings.setGpuAssemblyKktDeviceValues (
+         kktDeviceValuesEnabled);
+
       boolean timingEnabled = mySimulationPrefs.getCuDssTiming();
       if (cuDssTiming.value) {
          timingEnabled = true;
@@ -2737,6 +2745,8 @@ public class Main implements DriverInterface, ComponentChangeListener {
       new BooleanHolder (false);
    protected static BooleanHolder gpuAssemblyProfiling =
       new BooleanHolder (false);
+   protected static BooleanHolder gpuAssemblyKktDeviceValues =
+      new BooleanHolder (false);
    protected static BooleanHolder cuDssTiming = new BooleanHolder (false);
    protected static StringHolder testModelLoading = new StringHolder();
 
@@ -2992,6 +3002,10 @@ public class Main implements DriverInterface, ComponentChangeListener {
       parser.addOption (
          "-gpuAssemblyProfiling %v #print detailed GPU assembly timing diagnostics",
          gpuAssemblyProfiling);
+      parser.addOption (
+         "-gpuAssemblyKktDeviceValues %v "+
+         "#factor cuDSS KKT systems from device CRS values",
+         gpuAssemblyKktDeviceValues);
       parser.addOption (
          "-cuDssTiming %v #print cuDSS factor/solve timing diagnostics",
          cuDssTiming);
