@@ -4281,7 +4281,12 @@ PointAttachable, ConnectableBody {
             if (bi != -1) {
                for (int j = 0; j < e.myNodes.length; j++) {
                   int bj = e.myNodes[j].getLocalSolveIndex();
-                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                  // The direct-CRS device matrix is assembled and factored as a
+                  // GENERAL (full) matrix, so every node pair must be emitted,
+                  // not just the upper block triangle (bj >= bi). Each ordered
+                  // pair (i,j) maps to the distinct CRS block at position
+                  // (bi,bj); the kernel computes the correct K_ij = Bi^T D Bj.
+                  if (bj != -1) {
                      npairs++;
                   }
                }
@@ -4333,7 +4338,9 @@ PointAttachable, ConnectableBody {
             if (bi != -1) {
                for (int j = 0; j < e.myNodes.length; j++) {
                   int bj = e.myNodes[j].getLocalSolveIndex();
-                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                  // emit every node pair: the device matrix is factored as
+                  // GENERAL (full), so the lower block triangle must be filled
+                  if (bj != -1) {
                      FemNodeNeighbor nbr = e.myNbrs[i][j];
                      pairNodeIdxs[2*pairIdx] = i;
                      pairNodeIdxs[2*pairIdx+1] = j;
@@ -4456,7 +4463,9 @@ PointAttachable, ConnectableBody {
             if (bi != -1) {
                for (int j = 0; j < e.myNodes.length; j++) {
                   int bj = e.myNodes[j].getLocalSolveIndex();
-                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                  // emit every node pair: the device matrix is factored as
+                  // GENERAL (full), so the lower block triangle must be filled
+                  if (bj != -1) {
                      npairs++;
                   }
                }
@@ -4528,7 +4537,9 @@ PointAttachable, ConnectableBody {
             if (bi != -1) {
                for (int j = 0; j < e.myNodes.length; j++) {
                   int bj = e.myNodes[j].getLocalSolveIndex();
-                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                  // emit every node pair: the device matrix is factored as
+                  // GENERAL (full), so the lower block triangle must be filled
+                  if (bj != -1) {
                      FemNodeNeighbor nbr = e.myNbrs[i][j];
                      pairNodeIdxs[2*pairIdx] = i;
                      pairNodeIdxs[2*pairIdx+1] = j;

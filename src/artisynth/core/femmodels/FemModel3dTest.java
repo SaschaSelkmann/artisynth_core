@@ -696,6 +696,159 @@ public class FemModel3dTest extends UnitTest {
       mech.advance (0, 0.001, /*flags=*/0);
    }
 
+   // Verifies that the element-batched GPU linear-elastic stiffness path is
+   // actually routed to for a non-corotated LinearMaterial (the configuration
+   // the kernel supports), and is correctly skipped for the corotated default.
+   // Without this guard the linear-elastic descriptors (consumed by the GPU
+   // assembler) can silently regress to the generic CPU block assembly, which
+   // is exactly the gap that previously left the kernels unexercised end to
+   // end. See gpu_assembly_findings.md.
+   private void assertLinearElasticContributions (
+      boolean corotated, boolean expectContributions) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.8, 0.6, 2, 2, 2);
+      LinearMaterial mat = new LinearMaterial (10000, 0.33, corotated);
+      // pin corotated: it is an inherited property and is otherwise reset to
+      // the inherited default when the material is attached to the model
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.getNode (0).setDynamic (false);
+
+      MechModel mech = new MechModel();
+      mech.addModel (fem);
+      SparseNumberedBlockMatrix M = new SparseNumberedBlockMatrix();
+      mech.buildSolveMatrix (M);
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+         M.createCrsBlockSlotMap (Matrix.Partition.Full);
+      MechSystem.GpuAssemblyContext context =
+         new MechSystem.GpuAssemblyContext (
+            M, slotMap, mech.getStructureVersion());
+      fem.assemblePosJacobianCrsValueContributions (context, -0.0009);
+
+      // the linear-elastic path emits the geometry (deformation-gradient-on-GPU)
+      // descriptor variant; count both to be robust to which variant is used
+      int n = context.numLinearElasticStiffness3ElementContributions()
+            + context.numLinearElasticStiffness3ElementGeometryContributions();
+      if (expectContributions && n == 0) {
+         throw new TestException (
+            "non-corotated LinearMaterial produced no linear-elastic GPU "+
+            "stiffness contributions; kernel path not routed");
+      }
+      if (!expectContributions && n != 0) {
+         throw new TestException (
+            "corotated LinearMaterial produced "+n+" linear-elastic GPU "+
+            "stiffness contributions; gate failed (expected 0)");
+      }
+   }
+
+   private void testLinearElasticStiffness3Routing() {
+      assertLinearElasticContributions (
+         /*corotated=*/false, /*expectContributions=*/true);
+      assertLinearElasticContributions (
+         /*corotated=*/true, /*expectContributions=*/false);
+   }
+
+   // Behavioral GPU-vs-CPU equivalence for the linear-elastic kernels: steps a
+   // pure (attachment-free) non-corotated linear FEM beam once with the cuDSS
+   // device-assembly path and once with Pardiso on the CPU, and compares the
+   // resulting active velocity state. Gated on -Dartisynth.gpuAssembly.directCrs
+   // (and a working cuDSS) since it needs a GPU. The routing test above
+   // independently confirms the GPU run actually exercises the kernels.
+   private double[] runLinearElasticStep (
+      maspack.solvers.SparseSolverId solverId, boolean corotated) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, corotated);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel();
+      mech.setIntegrator (MechSystemSolver.Integrator.BackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+      mech.preadvance (0, 0.005, /*flags=*/0);
+      mech.advance (0, 0.005, /*flags=*/0);
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private double maxVelDiff (double[] a, double[] b) {
+      if (a.length != b.length) {
+         throw new TestException (
+            "velocity state size mismatch: "+a.length+" vs "+b.length);
+      }
+      double max = 0;
+      for (int i=0; i<a.length; i++) {
+         max = Math.max (max, Math.abs (a[i]-b[i]));
+      }
+      return max;
+   }
+
+   private double maxAbs (double[] a) {
+      double max = 0;
+      for (int i=0; i<a.length; i++) {
+         max = Math.max (max, Math.abs (a[i]));
+      }
+      return max;
+   }
+
+   private void testBackwardEulerLinearElasticEquivalence() {
+      if (!Boolean.getBoolean ("artisynth.gpuAssembly.directCrs")) {
+         return;
+      }
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         System.out.println (
+            "Skipping linear-elastic GPU equivalence test: cuDSS unavailable");
+         return;
+      }
+      maspack.solvers.SparseSolverId cudss =
+         maspack.solvers.SparseSolverId.CuDss;
+      maspack.solvers.SparseSolverId pardiso =
+         maspack.solvers.SparseSolverId.Pardiso;
+
+      // Control: corotated material routes cuDSS through host-assembled CRS
+      // values (no GPU stiffness kernel), so cuDSS and Pardiso must agree.
+      // This proves the cuDSS solve and the comparison harness are fair before
+      // we trust the non-corotated (GPU-kernel) comparison.
+      double[] coCpu = runLinearElasticStep (pardiso, /*corotated=*/true);
+      double[] coGpu = runLinearElasticStep (cudss,   /*corotated=*/true);
+      double coMax = maxVelDiff (coGpu, coCpu);
+      double coTol = Math.max (1e-9, 1e-7*maxAbs (coCpu));
+      if (coMax > coTol) {
+         throw new TestException (
+            "cuDSS-vs-Pardiso control (corotated, host-assembled) mismatch: "+
+            "max="+coMax+" (tol="+coTol+"); cuDSS solve itself disagrees, so "+
+            "the GPU-kernel comparison would be invalid");
+      }
+
+      // Real test: non-corotated material routes cuDSS through the GPU
+      // linear-elastic geometry stiffness kernel (linearGeomElem3). Compare
+      // against the CPU (Pardiso) assembly of the same model.
+      double[] ncCpu = runLinearElasticStep (pardiso, /*corotated=*/false);
+      double[] ncGpu = runLinearElasticStep (cudss,   /*corotated=*/false);
+      double ncMax = maxVelDiff (ncGpu, ncCpu);
+      double ncRef = maxAbs (ncCpu);
+      double ncTol = Math.max (1e-9, 1e-7*ncRef);
+      if (ncMax > ncTol) {
+         throw new TestException (
+            "GPU linear-elastic kernel vs CPU step velocity mismatch: max="+
+            ncMax+" (tol="+ncTol+", ref="+ncRef+"). cuDSS control passed "+
+            "(coMax="+coMax+"), so this points at the GPU stiffness kernel");
+      }
+      System.out.println (
+         "linear-elastic GPU equivalence ok: control="+coMax+
+         " kernel="+ncMax+" (ref="+ncRef+")");
+   }
+
    void checkNumbering (FemModel3d fem, boolean zeroBased) {
       int inc = zeroBased ? 0 : 1;
       for (int i=0; i< fem.numNodes(); i++) {
@@ -763,7 +916,9 @@ public class FemModel3dTest extends UnitTest {
       //testFrameRelativeMass();
       testFemNeighborCrsAssembly();
       testMaterialStiffness3ContextAssembly();
+      testLinearElasticStiffness3Routing();
       testBackwardEulerDirectCrsSolve();
+      testBackwardEulerLinearElasticEquivalence();
       testFindNearestElement();
       testSetNumbering();
       testFemCopy();
