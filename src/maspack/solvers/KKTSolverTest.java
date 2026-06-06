@@ -22,6 +22,22 @@ public class KKTSolverTest {
    private static double PREC = 1e-8;
    private boolean verbose = false;
 
+   private void setUniqueValues (SparseBlockMatrix M) {
+      double value = 1;
+      for (int bi=0; bi<M.numBlockRows(); bi++) {
+         for (MatrixBlock blk=M.firstBlockInRow(bi);
+              blk!=null; blk=blk.next()) {
+            for (int i=0; i<blk.rowSize(); i++) {
+               for (int j=0; j<blk.colSize(); j++) {
+                  if (blk.valueIsNonZero (i, j)) {
+                     blk.set (i, j, value++);
+                  }
+               }
+            }
+         }
+      }
+   }
+
    private class MLCP {
       SparseBlockMatrix M;   // mass matrix
       SparseBlockMatrix GT;  // bilateral constraint matrix, can be null
@@ -108,6 +124,100 @@ public class KKTSolverTest {
          M, 6, GT, NT, Rg, Rn, bm, bg, bn, vel, lam, the, Matrix.SYMMETRIC);
       solveAndCheck (
          M, 6, GT, NT, Rg, Rn, bm, bg, bn, vel, lam, the, Matrix.INDEFINITE);
+   }
+
+   private void checkKktMBlockSlotMap (
+      SparseNumberedBlockMatrix M, int sizeM, SparseBlockMatrix GT,
+      int typeM) {
+
+      VectorNd Rg = new VectorNd (GT.colSize());
+      Rg.setRandom();
+      KKTSolver solver = new KKTSolver();
+      solver.analyze (M, sizeM, GT, Rg, typeM);
+      SparseNumberedBlockMatrix.CrsBlockSlotMap map =
+         solver.getKktMBlockSlotMap();
+      if (map == null) {
+         throw new TestException ("KKT M block slot map is null");
+      }
+      double[] vals = solver.getCRSValuesForTesting();
+      int nseen = 0;
+      boolean[] seen = new boolean[vals.length];
+      Partition part = ((typeM & Matrix.SYMMETRIC) != 0) ?
+         Partition.UpperTriangular : Partition.Full;
+
+      for (int bi=0; bi<M.numBlockRows(); bi++) {
+         for (MatrixBlock blk=M.firstBlockInRow(bi);
+              blk!=null; blk=blk.next()) {
+            for (int i=0; i<blk.rowSize(); i++) {
+               for (int j=0; j<blk.colSize(); j++) {
+                  boolean stored = blk.valueIsNonZero (i, j);
+                  if (part == Partition.UpperTriangular) {
+                     if (blk.getBlockCol() < blk.getBlockRow()) {
+                        stored = false;
+                     }
+                     else if (blk.getBlockCol() == blk.getBlockRow() && j < i) {
+                        stored = false;
+                     }
+                  }
+                  int slot = map.getBlockValueSlot (blk, i, j);
+                  if (stored) {
+                     if (slot < 0 || slot >= vals.length) {
+                        throw new TestException (
+                           "bad KKT slot "+slot+" for block entry");
+                     }
+                     if (seen[slot]) {
+                        throw new TestException (
+                           "KKT slot "+slot+" mapped more than once");
+                     }
+                     seen[slot] = true;
+                     nseen++;
+                     if (vals[slot] != blk.get (i, j)) {
+                        throw new TestException (
+                           "bad KKT slot value: got "+vals[slot]+
+                           ", expected "+blk.get(i,j));
+                     }
+                  }
+                  else if (slot != -1) {
+                     throw new TestException (
+                        "unstored block entry mapped to KKT slot "+slot);
+                  }
+               }
+            }
+         }
+      }
+      if (nseen != map.numMappedBlockValues()) {
+         throw new TestException (
+            "saw "+nseen+" mapped KKT M values, expected "+
+            map.numMappedBlockValues());
+      }
+      solver.dispose();
+   }
+
+   public void testKktMBlockSlotMap() {
+      int[] sizes = new int[] { 2, 3, 1 };
+      SparseNumberedBlockMatrix M =
+         new SparseNumberedBlockMatrix (sizes, sizes);
+      M.addBlock (0, 0, new Matrix2x2Block());
+      M.addBlock (0, 1, new MatrixNdBlock (2, 3));
+      M.addBlock (1, 0, new MatrixNdBlock (3, 2));
+      M.addBlock (1, 1, new MatrixNdBlock (3, 3));
+      M.addBlock (1, 2, new MatrixNdBlock (3, 1));
+      M.addBlock (2, 2, new MatrixNdBlock (1, 1));
+      setUniqueValues (M);
+
+      SparseBlockMatrix GT = new SparseBlockMatrix();
+      MatrixNdBlock GT0 = new MatrixNdBlock (2, 2);
+      MatrixNdBlock GT1 = new MatrixNdBlock (3, 2);
+      MatrixNdBlock GT2 = new MatrixNdBlock (1, 2);
+      GT0.setRandom();
+      GT1.setRandom();
+      GT2.setRandom();
+      GT.addBlock (0, 0, GT0);
+      GT.addBlock (1, 0, GT1);
+      GT.addBlock (2, 0, GT2);
+
+      checkKktMBlockSlotMap (M, M.rowSize(), GT, Matrix.INDEFINITE);
+      checkKktMBlockSlotMap (M, M.rowSize(), GT, Matrix.SYMMETRIC);
    }
 
    private void solveAndCheck (
@@ -747,6 +857,7 @@ public class KKTSolverTest {
          //tester.test();
          //tester.testFromFile ("blockCollide3.txt");
          tester.testFromFile ("MLCPtest.txt");
+         tester.testKktMBlockSlotMap();
          tester.testCuDssEquality();
          tester.testCuDssRefactor();
       }

@@ -365,6 +365,31 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
     */
    public CrsBlockSlotMap createCrsBlockSlotMap (
       Partition part, int numRows, int numCols) {
+      int numVals = numNonZeroVals (part, numRows, numCols);
+      int[] rowOffs = new int[numRows+1];
+      int[] colIdxs = new int[numVals];
+      getCRSIndices (colIdxs, rowOffs, part, numRows, numCols);
+      for (int i=0; i<rowOffs.length; i++) {
+         rowOffs[i]--;
+      }
+      return createCrsBlockSlotMap (part, numRows, numCols, rowOffs, numVals);
+   }
+
+   /**
+    * Builds a mapping from numbered matrix blocks to CRS value-array slots,
+    * using caller-supplied row starts. This is useful when this matrix is
+    * embedded as the leading block of a larger CRS matrix and its entries
+    * appear at the beginning of each embedded CRS row.
+    *
+    * @param part matrix partition to map
+    * @param numRows number of rows delimiting the sub-matrix
+    * @param numCols number of columns delimiting the sub-matrix
+    * @param rowOffs zero-based row starts in the target CRS values array
+    * @param numVals total number of values in the target CRS values array
+    * @return block-to-CRS slot map into the target CRS values array
+    */
+   public CrsBlockSlotMap createCrsBlockSlotMap (
+      Partition part, int numRows, int numCols, int[] rowOffs, int numVals) {
 
       if (part != Partition.Full && part != Partition.UpperTriangular) {
          throw new UnsupportedOperationException (
@@ -380,13 +405,15 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
          throw new IllegalArgumentException (
             "submatrix is not block aligned");
       }
-
-      int numVals = numNonZeroVals (part, numRows, numCols);
-      int[] colIdxs = new int[numVals];
-      int[] rowOffs = new int[numRows+1];
-      getCRSIndices (colIdxs, rowOffs, part, numRows, numCols);
-      for (int i=0; i<rowOffs.length; i++) {
-         rowOffs[i]--;
+      if (rowOffs.length < numRows+1) {
+         throw new IllegalArgumentException (
+            "rowOffs length "+rowOffs.length+" < "+(numRows+1));
+      }
+      for (int i=0; i<=numRows; i++) {
+         if (rowOffs[i] < 0 || rowOffs[i] > numVals) {
+            throw new IllegalArgumentException (
+               "rowOffs["+i+"]="+rowOffs[i]+" outside target CRS values");
+         }
       }
 
       int[] blockOffs = new int[myMaxNumber+1];
@@ -420,7 +447,12 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
             for (int i=0; i<blk.rowSize(); i++) {
                for (int j=0; j<blk.colSize(); j++) {
                   if (isStoredEntry (blk, i, j, blkPart)) {
-                     slots[nextBlockOffs[num]++] = nextRowOffs[rowBase+i]++;
+                     int slot = nextRowOffs[rowBase+i]++;
+                     if (slot >= numVals) {
+                        throw new IllegalArgumentException (
+                           "mapped slot "+slot+" exceeds target CRS values");
+                     }
+                     slots[nextBlockOffs[num]++] = slot;
                   }
                }
             }

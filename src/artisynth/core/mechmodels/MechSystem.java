@@ -51,7 +51,7 @@ public interface MechSystem {
          myCrsColIdxs = new int[numVals];
          myCrsRowOffs = new int[slotMap.rowSize()+1];
          matrix.getCRSIndices (
-            myCrsColIdxs, myCrsRowOffs, Matrix.Partition.Full,
+            myCrsColIdxs, myCrsRowOffs, slotMap.getPartition(),
             slotMap.rowSize(), slotMap.colSize());
          myCrsValueSlots = new int[0];
          myCrsValueContributions = new double[0];

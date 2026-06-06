@@ -42,6 +42,7 @@ public class KKTSolver {
    int mySizeM;
    int myTypeM = Matrix.SYMMETRIC;
    Partition myPartitionM;
+   SparseNumberedBlockMatrix.CrsBlockSlotMap myKktMBlockSlotMap;
    int myNumG;
    int myNumN;
    int myNumD;
@@ -209,6 +210,14 @@ public class KKTSolver {
 
       getCRSRowOffsets (M, sizeM, GT);
       getCRSIndices (M, sizeM, numVals, GT);
+      if (M instanceof SparseNumberedBlockMatrix) {
+         myKktMBlockSlotMap =
+            ((SparseNumberedBlockMatrix)M).createCrsBlockSlotMap (
+               myPartitionM, sizeM, sizeM, myRowOffs, numVals);
+      }
+      else {
+         myKktMBlockSlotMap = null;
+      }
       // get values as well, since pardiso seems to need legitimate
       // values in some cases
       getCRSValues (M, sizeM, numVals, GT, Rg);
@@ -254,6 +263,14 @@ public class KKTSolver {
       myIterativeCnt = 0;
       myIterativeTimeMsec = 0;
       myState = State.ANALYZED;
+   }
+
+   public SparseNumberedBlockMatrix.CrsBlockSlotMap getKktMBlockSlotMap() {
+      return myKktMBlockSlotMap;
+   }
+
+   double[] getCRSValuesForTesting() {
+      return Arrays.copyOf (myVals, myNumVals);
    }
 
    private void getCRSRowOffsets (Object M, int sizeM, SparseBlockMatrix GT) {
