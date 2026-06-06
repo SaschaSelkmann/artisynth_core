@@ -69,6 +69,8 @@ public class CuDssSolver implements DirectSolver {
 
    private static int myInitStatus = INIT_UNKNOWN;
    private static String myInitErrMsg;
+   private static boolean myTimingEnabled =
+      Boolean.getBoolean ("artisynth.cudss.timing");
 
    private long myHandle;        // pointer to native CuDssBridge
    private int  myState;
@@ -110,8 +112,8 @@ public class CuDssSolver implements DirectSolver {
       try {
          NativeLibraryManager.load (nativeLibrary);
          myInitStatus = INIT_OK;
-         // Propagate the timing system property to the native bridge.
-         if (Boolean.getBoolean ("artisynth.cudss.timing")) {
+         // Propagate the requested timing state to the native bridge.
+         if (myTimingEnabled) {
             doSetTimingEnabled (true);
          }
       }
@@ -128,10 +130,17 @@ public class CuDssSolver implements DirectSolver {
     * {@code [cudss-timing]} line to stderr.
     */
    public static void setTimingEnabled (boolean on) {
-      if (!isAvailable()) {
-         return;
+      myTimingEnabled = on;
+      if (myInitStatus == INIT_OK) {
+         doSetTimingEnabled (on);
       }
-      doSetTimingEnabled (on);
+      else if (on && isAvailable()) {
+         doSetTimingEnabled (true);
+      }
+   }
+
+   public static boolean getTimingEnabled() {
+      return myTimingEnabled;
    }
 
    /**

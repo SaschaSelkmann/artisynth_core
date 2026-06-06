@@ -67,6 +67,15 @@ public class SimulationPrefs extends Preferences {
    private SparseSolverId myMatrixSolver =
       SimulationSettings.DEFAULT_MATRIX_SOLVER;
 
+   private boolean myGpuAssemblyStatus =
+      SimulationSettings.DEFAULT_GPU_ASSEMBLY_STATUS;
+
+   private boolean myGpuAssemblyProfiling =
+      SimulationSettings.DEFAULT_GPU_ASSEMBLY_PROFILING;
+
+   private boolean myCuDssTiming =
+      SimulationSettings.DEFAULT_CUDSS_TIMING;
+
    @Override
    public PropertyList getAllPropertyInfo () {
       return myProps;
@@ -131,6 +140,30 @@ public class SimulationPrefs extends Preferences {
       myMatrixSolver = MatrixSolver;
    }
 
+   public boolean getGpuAssemblyStatus () {
+      return myGpuAssemblyStatus;
+   }
+
+   public void setGpuAssemblyStatus (boolean enable) {
+      myGpuAssemblyStatus = enable;
+   }
+
+   public boolean getGpuAssemblyProfiling () {
+      return myGpuAssemblyProfiling;
+   }
+
+   public void setGpuAssemblyProfiling (boolean enable) {
+      myGpuAssemblyProfiling = enable;
+   }
+
+   public boolean getCuDssTiming () {
+      return myCuDssTiming;
+   }
+
+   public void setCuDssTiming (boolean enable) {
+      myCuDssTiming = enable;
+   }
+
    public boolean getHybridSolvesEnabled () {
       return myHybridSolvesEnabled;
    }
@@ -165,6 +198,9 @@ public class SimulationPrefs extends Preferences {
       setNumSolverThreads (mySettings.getNumSolverThreads());
       setShowIllConditionedSolves (mySettings.getShowIllConditionedSolves());
       setMatrixSolver (mySettings.getMatrixSolver());
+      setGpuAssemblyStatus (mySettings.getGpuAssemblyStatus());
+      setGpuAssemblyProfiling (mySettings.getGpuAssemblyProfiling());
+      setCuDssTiming (mySettings.getCuDssTiming());
    }
 
    public void applyToCurrent() {
@@ -177,6 +213,9 @@ public class SimulationPrefs extends Preferences {
       mySettings.setNumSolverThreads (getNumSolverThreads());
       mySettings.setShowIllConditionedSolves (getShowIllConditionedSolves());
       mySettings.setMatrixSolver (getMatrixSolver());
+      mySettings.setGpuAssemblyStatus (getGpuAssemblyStatus());
+      mySettings.setGpuAssemblyProfiling (getGpuAssemblyProfiling());
+      mySettings.setCuDssTiming (getCuDssTiming());
 
       if (mySettings.getDialog() != null) {
          mySettings.getDialog().updateWidgetValues();

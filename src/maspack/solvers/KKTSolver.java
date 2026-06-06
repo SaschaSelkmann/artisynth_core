@@ -26,8 +26,16 @@ public class KKTSolver {
    // when building an LCP matrix, use solves with multiple right sides:
    public static boolean useBlockSolves = false;
    public static String myQPTestCaseFile = null; // "contactQP.txt";
-   private static final boolean profileGpuAssembly =
+   private static boolean myGpuAssemblyProfilingEnabled =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
+
+   public static boolean getGpuAssemblyProfilingEnabled() {
+      return myGpuAssemblyProfilingEnabled;
+   }
+
+   public static void setGpuAssemblyProfilingEnabled (boolean enable) {
+      myGpuAssemblyProfilingEnabled = enable;
+   }
 
    boolean myTimeSolves = false;
    boolean myMDiagonalP = false;
@@ -329,6 +337,7 @@ public class KKTSolver {
 
    private void getCRSValues (
       Object M, int sizeM, int numVals, SparseBlockMatrix GT, VectorNd Rg) {
+      boolean profileGpuAssembly = myGpuAssemblyProfilingEnabled;
       long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       for (int i = 0; i < sizeM; i++) {
          myLocalOffs[i] = myRowOffs[i];

@@ -8,6 +8,8 @@ import artisynth.core.mechmodels.MechSystemSolver;
 import artisynth.core.mechmodels.MechSystemSolver.PosStabilization;
 import artisynth.core.modelbase.ModelBase;
 import maspack.properties.PropertyList;
+import maspack.solvers.CuDssSolver;
+import maspack.solvers.KKTSolver;
 import maspack.solvers.PardisoSolver;
 import maspack.solvers.SparseSolverId;
 import maspack.util.EnumRange;
@@ -47,6 +49,15 @@ public class SimulationSettings extends SettingsBase {
 
    public static SparseSolverId DEFAULT_MATRIX_SOLVER = SparseSolverId.Pardiso;
 
+   public static final boolean DEFAULT_GPU_ASSEMBLY_STATUS =
+      Boolean.getBoolean ("artisynth.gpuAssembly.status");
+
+   public static final boolean DEFAULT_GPU_ASSEMBLY_PROFILING =
+      Boolean.getBoolean ("artisynth.gpuAssembly.profile");
+
+   public static final boolean DEFAULT_CUDSS_TIMING =
+      Boolean.getBoolean ("artisynth.cudss.timing");
+
    static {
       myProps.add (
          "maxStepSize",
@@ -84,6 +95,18 @@ public class SimulationSettings extends SettingsBase {
          "matrixSolver",
          "default sparse matrix solver",
          DEFAULT_MATRIX_SOLVER);
+      myProps.add (
+         "gpuAssemblyStatus",
+         "print concise GPU assembly route diagnostics",
+         DEFAULT_GPU_ASSEMBLY_STATUS);
+      myProps.add (
+         "gpuAssemblyProfiling",
+         "print detailed GPU assembly timing diagnostics",
+         DEFAULT_GPU_ASSEMBLY_PROFILING);
+      myProps.add (
+         "cuDssTiming",
+         "print cuDSS factor/solve timing diagnostics",
+         DEFAULT_CUDSS_TIMING);
    }
 
    public PropertyList getAllPropertyInfo () {
@@ -168,5 +191,30 @@ public class SimulationSettings extends SettingsBase {
 
    public void setMatrixSolver (SparseSolverId MatrixSolver) {
       MechSystemBase.setDefaultMatrixSolver (MatrixSolver);
+   }
+
+   public boolean getGpuAssemblyStatus () {
+      return MechSystemSolver.getGpuAssemblyStatusEnabled();
+   }
+
+   public void setGpuAssemblyStatus (boolean enable) {
+      MechSystemSolver.setGpuAssemblyStatusEnabled (enable);
+   }
+
+   public boolean getGpuAssemblyProfiling () {
+      return MechSystemSolver.getGpuAssemblyProfilingEnabled();
+   }
+
+   public void setGpuAssemblyProfiling (boolean enable) {
+      MechSystemSolver.setGpuAssemblyProfilingEnabled (enable);
+      KKTSolver.setGpuAssemblyProfilingEnabled (enable);
+   }
+
+   public boolean getCuDssTiming () {
+      return CuDssSolver.getTimingEnabled();
+   }
+
+   public void setCuDssTiming (boolean enable) {
+      CuDssSolver.setTimingEnabled (enable);
    }
 }

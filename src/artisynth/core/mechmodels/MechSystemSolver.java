@@ -77,9 +77,9 @@ public class MechSystemSolver {
    public boolean profileWholeSolve = false;
    public boolean profileConstrainedBE = false;
    public boolean profileImplicitFriction = false;
-   private static final boolean profileGpuAssembly =
+   private static boolean myGpuAssemblyProfilingEnabled =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
-   private static final boolean reportGpuAssemblyStatus =
+   private static boolean myGpuAssemblyStatusEnabled =
       Boolean.getBoolean ("artisynth.gpuAssembly.status");
    private static final boolean enableGpuAssemblyProperty =
       Boolean.getBoolean ("artisynth.gpuAssembly.enabled");
@@ -1117,6 +1117,22 @@ public class MechSystemSolver {
       return nanos/1e6;
    }
 
+   public static boolean getGpuAssemblyProfilingEnabled() {
+      return myGpuAssemblyProfilingEnabled;
+   }
+
+   public static void setGpuAssemblyProfilingEnabled (boolean enable) {
+      myGpuAssemblyProfilingEnabled = enable;
+   }
+
+   public static boolean getGpuAssemblyStatusEnabled() {
+      return myGpuAssemblyStatusEnabled;
+   }
+
+   public static void setGpuAssemblyStatusEnabled (boolean enable) {
+      myGpuAssemblyStatusEnabled = enable;
+   }
+
    private String profileName() {
       String name = null;
       if (mySys instanceof ModelComponent) {
@@ -1189,7 +1205,7 @@ public class MechSystemSolver {
    }
 
    private void maybeProfileGpuAssemblySolveRoute() {
-      if (profileGpuAssembly && enableGpuAssemblyDirectCrs() &&
+      if (myGpuAssemblyProfilingEnabled && enableGpuAssemblyDirectCrs() &&
           myIntegrator != Integrator.BackwardEuler) {
          System.out.printf (
             "[gpu-assembly-profile] solver=%s route integrator=%s "+
@@ -1208,7 +1224,7 @@ public class MechSystemSolver {
       String phase, boolean directCrs, boolean deviceCrs,
       String directCrsStatus, int size) {
 
-      if (!reportGpuAssemblyStatus || !enableGpuAssemblyDirectCrs()) {
+      if (!myGpuAssemblyStatusEnabled || !enableGpuAssemblyDirectCrs()) {
          return;
       }
       String status = String.format (
@@ -1606,9 +1622,10 @@ public class MechSystemSolver {
       myF.add (myMassForces);
       myB.scaledAdd (h, myF, myB);
 
-      long tBuildStart = profileGpuAssembly ? System.nanoTime() : 0;
+      long tBuildStart =
+         myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       mySolveMatrix.setZero();
-      long tZero = profileGpuAssembly ? System.nanoTime() : 0;
+      long tZero = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       boolean assembleDirectCrs =
          enableGpuAssembly() &&
          (verifyGpuAssemblyCrs || enableGpuAssemblyDirectCrs());
@@ -1665,7 +1682,7 @@ public class MechSystemSolver {
             verifyGpuVelJacobianCrs (
                directCrsContext, -h, "backwardEuler velocity Jacobian");
       }
-      long tVelJac = profileGpuAssembly ? System.nanoTime() : 0;
+      long tVelJac = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
          if (directCrsMatrixReady) {
             myB.scaledAdd (h, directCrsVelForces);
@@ -1687,7 +1704,7 @@ public class MechSystemSolver {
       else {
          mySolveMatrix.mulAdd (myB, myU, vsize, vsize);
       }
-      long tMulJv = profileGpuAssembly ? System.nanoTime() : 0;
+      long tMulJv = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
 
       if (!directCrsMatrixReady) {
          myC.setZero ();
@@ -1702,7 +1719,7 @@ public class MechSystemSolver {
                /*cumulative=*/true);
          }
       }
-      long tPosJac = profileGpuAssembly ? System.nanoTime() : 0;
+      long tPosJac = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       if (useFictitousJacobianForces) {
          if (directCrsMatrixReady) {
             myB.scaledAdd (h, directCrsPosForces);
@@ -1725,7 +1742,7 @@ public class MechSystemSolver {
             }
          }
       }
-      long tMass = profileGpuAssembly ? System.nanoTime() : 0;
+      long tMass = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
 
       //mySolveMatrix.writeToFileCRS ("solveMat_foo.txt", "%g");
 
@@ -1763,7 +1780,7 @@ public class MechSystemSolver {
                   myDirectSolver.analyze (
                      mySolveMatrix, vsize, matrixType);
                }
-               if (profileGpuAssembly) {
+               if (myGpuAssemblyProfilingEnabled) {
                   tAnalyze = System.nanoTime();
                }
             }
@@ -1775,7 +1792,7 @@ public class MechSystemSolver {
             }
          }
       }
-      else if (profileGpuAssembly) {
+      else if (myGpuAssemblyProfilingEnabled) {
          tAnalyze = System.nanoTime();
       }
       long tSolve = tAnalyze;
@@ -1803,14 +1820,14 @@ public class MechSystemSolver {
          else {
             myIterativeSolver.solve (myU, mySolveMatrix, myB);
          }
-         if (profileGpuAssembly) {
+         if (myGpuAssemblyProfilingEnabled) {
             tSolve = System.nanoTime();
          }
       }
-      else if (profileGpuAssembly) {
+      else if (myGpuAssemblyProfilingEnabled) {
          tSolve = System.nanoTime();
       }
-      if (profileGpuAssembly) {
+      if (myGpuAssemblyProfilingEnabled) {
          System.out.printf (
             "[gpu-assembly-profile] solver=%s backwardEuler "+
             "matrixTotal=%.3fms zero=%.3fms addVelJac=%.3fms "+
@@ -2264,9 +2281,10 @@ public class MechSystemSolver {
 
       SparseNumberedBlockMatrix S = mySolveMatrix;      
 
-      long tBuildStart = profileGpuAssembly ? System.nanoTime() : 0;
+      long tBuildStart =
+         myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       S.setZero();
-      long tZero = profileGpuAssembly ? System.nanoTime() : 0;
+      long tZero = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       long tVelJac = tZero;
       long tMul = tZero;
       long tPosJac = tZero;
@@ -2285,7 +2303,8 @@ public class MechSystemSolver {
          }
          crsVerified = verifyGpuVelJacobianCrs (
             a0, "KKT velocity Jacobian");
-         tVelJac = profileGpuAssembly ? System.nanoTime() : tVelJac;
+         tVelJac =
+            myGpuAssemblyProfilingEnabled ? System.nanoTime() : tVelJac;
          if (useFictitousJacobianForces) {
             bf.scaledAdd (-a0, myC);
             if (fpar != null && myParametricVelSize > 0) {
@@ -2297,7 +2316,7 @@ public class MechSystemSolver {
             S.mul (btmp, vel0, velSize, velSize);
             bf.scaledAdd (alpha, btmp);
          }
-         tMul = profileGpuAssembly ? System.nanoTime() : tMul;
+         tMul = myGpuAssemblyProfilingEnabled ? System.nanoTime() : tMul;
          myC.setZero();
          gpuPos = addGpuPosJacobian (S, myC, a1, "KKT position Jacobian");
          if (!gpuPos) {
@@ -2307,7 +2326,8 @@ public class MechSystemSolver {
             crsVerified = verifyGpuPosJacobianCrs (
                a1, "KKT position Jacobian", /*cumulative=*/true);
          }
-         tPosJac = profileGpuAssembly ? System.nanoTime() : tPosJac;
+         tPosJac =
+            myGpuAssemblyProfilingEnabled ? System.nanoTime() : tPosJac;
 
          if (useFictitousJacobianForces) {
             bf.scaledAdd (-a0, myC);
@@ -2323,16 +2343,17 @@ public class MechSystemSolver {
       }
 
       addActiveMassMatrix (mySys, S);
-      long tMass = profileGpuAssembly ? System.nanoTime() : 0;
+      long tMass = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       if (velSize > 0 && myParametricVelSize > 0) {
          S.mulTranspose (
             btmp, myUpar, 0, velSize, velSize, myParametricVelSize);
          bf.sub (btmp);
       }
-      long tParametric = profileGpuAssembly ? System.nanoTime() : 0;
+      long tParametric =
+         myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
       maybeReportGpuAssemblyStatus (
          "kktBuild", false, false, "kktPath", velSize);
-      if (profileGpuAssembly) {
+      if (myGpuAssemblyProfilingEnabled) {
          System.out.printf (
             "[gpu-assembly-profile] solver=%s kktBuild total=%.3fms "+
             "zero=%.3fms addVelJac=%.3fms mulImplicit=%.3fms "+

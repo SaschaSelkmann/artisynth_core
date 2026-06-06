@@ -1722,6 +1722,25 @@ public class Main implements DriverInterface, ComponentChangeListener {
          solver = SparseSolverId.valueOf (matrixSolver.value);
       }
       MechSystemBase.setDefaultMatrixSolver (solver);
+
+      boolean statusEnabled = mySimulationPrefs.getGpuAssemblyStatus();
+      if (gpuAssemblyStatus.value) {
+         statusEnabled = true;
+      }
+      mySimulationSettings.setGpuAssemblyStatus (statusEnabled);
+
+      boolean profilingEnabled =
+         mySimulationPrefs.getGpuAssemblyProfiling();
+      if (gpuAssemblyProfiling.value) {
+         profilingEnabled = true;
+      }
+      mySimulationSettings.setGpuAssemblyProfiling (profilingEnabled);
+
+      boolean timingEnabled = mySimulationPrefs.getCuDssTiming();
+      if (cuDssTiming.value) {
+         timingEnabled = true;
+      }
+      mySimulationSettings.setCuDssTiming (timingEnabled);
    }      
 
    private void initializeMaintenancePrefs () {
@@ -2714,6 +2733,11 @@ public class Main implements DriverInterface, ComponentChangeListener {
    protected static BooleanHolder openMatlab = new BooleanHolder(false);
 
    protected static StringHolder matrixSolver = new StringHolder();
+   protected static BooleanHolder gpuAssemblyStatus =
+      new BooleanHolder (false);
+   protected static BooleanHolder gpuAssemblyProfiling =
+      new BooleanHolder (false);
+   protected static BooleanHolder cuDssTiming = new BooleanHolder (false);
    protected static StringHolder testModelLoading = new StringHolder();
 
    // Dimension getViewerSize() {
@@ -2962,6 +2986,15 @@ public class Main implements DriverInterface, ComponentChangeListener {
       parser.addOption (
          "-matrixSolver %s{Pardiso,Umfpack,CuDss} #default matrix solver",
          matrixSolver);
+      parser.addOption (
+         "-gpuAssemblyStatus %v #print concise GPU assembly route diagnostics",
+         gpuAssemblyStatus);
+      parser.addOption (
+         "-gpuAssemblyProfiling %v #print detailed GPU assembly timing diagnostics",
+         gpuAssemblyProfiling);
+      parser.addOption (
+         "-cuDssTiming %v #print cuDSS factor/solve timing diagnostics",
+         cuDssTiming);
       parser.addOption (
          "-numSolverThreads %d #number of threads to use for linear solver",
          numSolverThreads);

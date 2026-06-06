@@ -36,6 +36,7 @@ import artisynth.core.mechmodels.Frame;
 import artisynth.core.mechmodels.HasSurfaceMesh;
 import artisynth.core.mechmodels.MechSystem;
 import artisynth.core.mechmodels.MechSystemBase;
+import artisynth.core.mechmodels.MechSystemSolver;
 import artisynth.core.mechmodels.MeshComponent;
 import artisynth.core.mechmodels.MeshComponentList;
 import artisynth.core.mechmodels.Point;
@@ -136,8 +137,6 @@ PointAttachable, ConnectableBody {
    protected boolean myFrameRelativeP;
    public static boolean useFrameRelativeCouplingMasses = false;
    protected boolean profileStressAndStiffness = false;
-   private static final boolean profileGpuAssembly =
-      Boolean.getBoolean ("artisynth.gpuAssembly.profile");
 
    protected PointList<FemNode3d> myNodes;
    protected ArrayList<BodyConnector> myConnectors;
@@ -2845,6 +2844,8 @@ PointAttachable, ConnectableBody {
       if (profileStressAndStiffness) {
          timerStart();
       }
+      boolean profileGpuAssembly =
+         MechSystemSolver.getGpuAssemblyProfilingEnabled();
       long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       // allocate or deallocate nodal incompressibility blocks
       setNodalIncompBlocksAllocated (getSoftIncompMethod()==IncompMethod.NODAL);
@@ -4062,6 +4063,8 @@ PointAttachable, ConnectableBody {
    public void addVelJacobian(
       SparseNumberedBlockMatrix M, double s) {
 
+      boolean profileGpuAssembly =
+         MechSystemSolver.getGpuAssemblyProfilingEnabled();
       long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       if (!myStressesValidP || !myStiffnessesValidP) {
          updateStressAndStiffness();
@@ -4162,6 +4165,8 @@ PointAttachable, ConnectableBody {
    public void addPosJacobian(
       SparseNumberedBlockMatrix M, double s) {
 
+      boolean profileGpuAssembly =
+         MechSystemSolver.getGpuAssemblyProfilingEnabled();
       long tStart = profileGpuAssembly ? System.nanoTime() : 0;
       if (!myStressesValidP || !myStiffnessesValidP) {
          updateStressAndStiffness();
