@@ -79,6 +79,8 @@ public class MechSystemSolver {
    public boolean profileImplicitFriction = false;
    private static final boolean profileGpuAssembly =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
+   private static final boolean reportGpuAssemblyStatus =
+      Boolean.getBoolean ("artisynth.gpuAssembly.status");
    private static final boolean enableGpuAssemblyProperty =
       Boolean.getBoolean ("artisynth.gpuAssembly.enabled");
    private static final boolean verifyGpuAssemblyCrs =
@@ -105,6 +107,7 @@ public class MechSystemSolver {
    private boolean myWarnedGpuAssemblyFallback = false;
    private boolean myWarnedGpuAssemblyCrsVerifyIncomplete = false;
    private boolean myWarnedGpuAssemblyDirectCrsFallback = false;
+   private String myLastGpuAssemblyStatus = null;
    private int myGpuAssemblyContextVersion = -1;
    private int myGpuAssemblyContextRowSize = -1;
    private int myGpuAssemblyContextColSize = -1;
@@ -1194,6 +1197,30 @@ public class MechSystemSolver {
             "directCrsStatus=integrator%s%n",
             profileName(), myIntegrator, myMatrixSolver, myIntegrator);
       }
+      if (myIntegrator != Integrator.BackwardEuler) {
+         maybeReportGpuAssemblyStatus (
+            "route", false, false, "integrator"+myIntegrator,
+            myActiveVelSize);
+      }
+   }
+
+   private void maybeReportGpuAssemblyStatus (
+      String phase, boolean directCrs, boolean deviceCrs,
+      String directCrsStatus, int size) {
+
+      if (!reportGpuAssemblyStatus || !enableGpuAssemblyDirectCrs()) {
+         return;
+      }
+      String status = String.format (
+         "[gpu-assembly-status] solver=%s phase=%s integrator=%s "+
+         "matrixSolver=%s directCrs=%b deviceCrs=%b "+
+         "directCrsStatus=%s size=%d",
+         profileName(), phase, myIntegrator, myMatrixSolver, directCrs,
+         deviceCrs, directCrsStatus, size);
+      if (!status.equals (myLastGpuAssemblyStatus)) {
+         System.out.println (status);
+         myLastGpuAssemblyStatus = status;
+      }
    }
 
    private void maybeWarnGpuAssemblyFallback (String phase) {
@@ -1709,6 +1736,9 @@ public class MechSystemSolver {
          (directCrsDeviceValuesReady ? "deviceValues" : "hostValues") :
          getGpuAssemblyDirectCrsStatus (
             crsVerified, vsize, directCrsContext);
+      maybeReportGpuAssemblyStatus (
+         "backwardEuler", useDirectCrs, directCrsDeviceValuesReady,
+         directCrsStatus, vsize);
       long tAnalyze = tMass;
       if (mySolveMatrixVersion != myRegSolveMatrixVersion) {
          analyze = true;
@@ -2300,6 +2330,8 @@ public class MechSystemSolver {
          bf.sub (btmp);
       }
       long tParametric = profileGpuAssembly ? System.nanoTime() : 0;
+      maybeReportGpuAssemblyStatus (
+         "kktBuild", false, false, "kktPath", velSize);
       if (profileGpuAssembly) {
          System.out.printf (
             "[gpu-assembly-profile] solver=%s kktBuild total=%.3fms "+
