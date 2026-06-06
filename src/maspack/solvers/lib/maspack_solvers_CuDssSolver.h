@@ -91,6 +91,14 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddScaledBlock3DeviceV
 
 /*
  * Class:     maspack_solvers_CuDssSolver
+ * Method:    doAddMaterialStiffness3DeviceValues
+ * Signature: (J[I[D[D[D[D[DID)I
+ */
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3DeviceValues
+  (JNIEnv *, jclass, jlong, jintArray, jdoubleArray, jdoubleArray, jdoubleArray, jdoubleArray, jdoubleArray, jint, jdouble);
+
+/*
+ * Class:     maspack_solvers_CuDssSolver
  * Method:    doFactorDeviceValues
  * Signature: (J)I
  */

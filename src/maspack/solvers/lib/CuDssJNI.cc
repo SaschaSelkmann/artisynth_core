@@ -147,6 +147,46 @@ Java_maspack_solvers_CuDssSolver_doAddScaledBlock3DeviceValues
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL
+Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3DeviceValues
+  (JNIEnv* env, jclass /*cls*/, jlong handle,
+   jintArray blockSlots, jdoubleArray gis, jdoubleArray gjs,
+   jdoubleArray Ds, jdoubleArray sigmas, jdoubleArray dvs,
+   jint nblocks, jdouble scale) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   jint* blockSlotsP = env->GetIntArrayElements (blockSlots, nullptr);
+   jdouble* gisP = env->GetDoubleArrayElements (gis, nullptr);
+   jdouble* gjsP = env->GetDoubleArrayElements (gjs, nullptr);
+   jdouble* DsP = env->GetDoubleArrayElements (Ds, nullptr);
+   jdouble* sigmasP = env->GetDoubleArrayElements (sigmas, nullptr);
+   jdouble* dvsP = env->GetDoubleArrayElements (dvs, nullptr);
+   if (!blockSlotsP || !gisP || !gjsP || !DsP || !sigmasP || !dvsP) {
+      if (blockSlotsP) {
+         env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+      }
+      if (gisP) env->ReleaseDoubleArrayElements (gis, gisP, JNI_ABORT);
+      if (gjsP) env->ReleaseDoubleArrayElements (gjs, gjsP, JNI_ABORT);
+      if (DsP) env->ReleaseDoubleArrayElements (Ds, DsP, JNI_ABORT);
+      if (sigmasP) {
+         env->ReleaseDoubleArrayElements (sigmas, sigmasP, JNI_ABORT);
+      }
+      if (dvsP) env->ReleaseDoubleArrayElements (dvs, dvsP, JNI_ABORT);
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = b->addMaterialStiffness3DeviceValues (
+      (const int*)blockSlotsP, (const double*)gisP, (const double*)gjsP,
+      (const double*)DsP, (const double*)sigmasP, (const double*)dvsP,
+      (int)nblocks, (double)scale);
+   env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (gis, gisP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (gjs, gjsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (Ds, DsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (sigmas, sigmasP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (dvs, dvsP, JNI_ABORT);
+   return (jint)status;
+}
+
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactorDeviceValues
   (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
    CuDssBridge* b = asBridge (handle);

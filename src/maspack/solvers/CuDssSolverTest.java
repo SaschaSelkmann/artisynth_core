@@ -462,6 +462,51 @@ public class CuDssSolverTest extends UnitTest {
       finally { s.dispose(); }
    }
 
+   private void testMaterialStiffness3DeviceContribution() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         double[] zeroVals = { 0, 0, 0 };
+         int[] cols = { 0, 1, 2 };
+         int[] rows = { 0, 1, 2, 3 };
+         s.analyze (zeroVals, cols, rows, 3, Matrix.SPD);
+
+         int[] blockSlots = {
+             0, -1, -1,  -1,  1, -1,  -1, -1,  2,
+             0, -1, -1,  -1,  1, -1,  -1, -1,  2,
+             0, -1, -1,  -1,  1, -1,  -1, -1,  2
+         };
+         double[] gis = {
+            1, 0, 0,
+            0, 1, 0,
+            0, 0, 1
+         };
+         double[] gjs = gis.clone();
+         double[] Ds = new double[3*36];
+         Ds[0*36 + 0] = 4;
+         Ds[1*36 + 7] = 5;
+         Ds[2*36 + 14] = 6;
+         double[] sigmas = new double[3*6];
+         double[] dvs = { 1, 1, 1 };
+
+         s.clearDeviceValues();
+         s.addMaterialStiffness3DeviceValues (
+            blockSlots, gis, gjs, Ds, sigmas, dvs, 3, 1.0);
+         s.factorDeviceValues();
+
+         double[] x = new double[3];
+         s.solve (x, new double[] { 4, 10, 18 });
+         for (int i=0; i<3; i++) {
+            double expected = i + 1;
+            if (Math.abs (x[i] - expected) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "material stiffness3 device contribution x[" + i + "]=" +
+                  x[i] + " expected " + expected);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
    // Refactor with same pattern via array entry points.
    private void testArrayCsrRefactor() {
       CuDssSolver s = new CuDssSolver();
@@ -675,6 +720,7 @@ public class CuDssSolverTest extends UnitTest {
       testDeviceValueAssembly();
       testScaledDiagonal3DeviceContribution();
       testScaledBlock3DeviceContribution();
+      testMaterialStiffness3DeviceContribution();
       testArrayCsrRefactor();
       testMultiRhsConsistency();
       testMultiRhsGrowShrink();

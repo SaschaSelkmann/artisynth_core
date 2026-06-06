@@ -98,6 +98,10 @@ public class CuDssSolver implements DirectSolver {
    private static native int    doAddScaledBlock3DeviceValues (
       long handle, int[] blockSlots, double[] blockVals,
       double[] blockScales, int nblocks, double scale);
+   private static native int    doAddMaterialStiffness3DeviceValues (
+      long handle, int[] blockSlots, double[] gis, double[] gjs,
+      double[] Ds, double[] sigmas, double[] dvs, int nblocks,
+      double scale);
    private static native int    doFactorDeviceValues (long handle);
    private static native int    doSolve   (long handle, double[] b, double[] x);
    private static native int    doSolveMulti (
@@ -476,6 +480,37 @@ public class CuDssSolver implements DirectSolver {
          doAddScaledBlock3DeviceValues (
             myHandle, blockSlots, blockVals, blockScales, nblocks, scale),
          "addScaledBlock3DeviceValues");
+   }
+
+   /**
+    * Computes and adds 3x3 material stiffness contributions on the GPU using
+    * the same formula as
+    * {@code FemUtilities.addMaterialStiffness(K, gi, D, sig, gj, dv)}.
+    *
+    * <p>Per contribution: {@code blockSlots} has 9 CRS slots,
+    * {@code gis}/{@code gjs} have 3 vector entries, {@code Ds} has a 6x6
+    * row-major tangent matrix, {@code sigmas} is ordered as
+    * {@code [m00,m11,m22,m01,m12,m02]}, and {@code dvs} has the integration
+    * weight. Negative CRS slots are ignored.
+    */
+   public synchronized void addMaterialStiffness3DeviceValues (
+      int[] blockSlots, double[] gis, double[] gjs, double[] Ds,
+      double[] sigmas, double[] dvs, int nblocks, double scale) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      if (nblocks < 0 || nblocks > blockSlots.length/9 ||
+          nblocks > gis.length/3 || nblocks > gjs.length/3 ||
+          nblocks > Ds.length/36 || nblocks > sigmas.length/6 ||
+          nblocks > dvs.length) {
+         throw new IllegalArgumentException (
+            "nblocks exceeds material stiffness descriptor array length");
+      }
+      check (
+         doAddMaterialStiffness3DeviceValues (
+            myHandle, blockSlots, gis, gjs, Ds, sigmas, dvs,
+            nblocks, scale),
+         "addMaterialStiffness3DeviceValues");
    }
 
    /**

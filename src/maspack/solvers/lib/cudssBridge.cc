@@ -39,6 +39,11 @@ extern "C" void addScaledBlock3_launch (
    int nblocks, const int* blockSlots, const double* blockVals,
    const double* blockScales, double globalScale, double* crsVals,
    cudaStream_t stream);
+extern "C" void addMaterialStiffness3_launch (
+   int nblocks, const int* blockSlots, const double* gis,
+   const double* gjs, const double* Ds, const double* sigmas,
+   const double* dvs, double globalScale, double* crsVals,
+   cudaStream_t stream);
 
 void CuDssBridge::setTimingEnabled (bool on) {
    g_timing = on;
@@ -592,6 +597,93 @@ int CuDssBridge::addScaledBlock3DeviceValues (
    cudaFree (blockScalesD);
    if (!cudaOk (launchErr)) {
       myLastErr = "addScaledBlock3 kernel launch failed";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   myItDiagDirty = true;
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
+int CuDssBridge::addMaterialStiffness3DeviceValues (
+   const int* blockSlots, const double* gis, const double* gjs,
+   const double* Ds, const double* sigmas, const double* dvs,
+   int nblocks, double scale) {
+
+   if (!myHasPattern || !myValsD) {
+      myLastErr = "addMaterialStiffness3DeviceValues called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nblocks < 0) {
+      myLastErr =
+         "addMaterialStiffness3DeviceValues received a negative block count";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nblocks == 0) {
+      myLastErr = nullptr;
+      return CUDSS_BRIDGE_OK;
+   }
+
+   int* blockSlotsD = nullptr;
+   double* gisD = nullptr;
+   double* gjsD = nullptr;
+   double* DsD = nullptr;
+   double* sigmasD = nullptr;
+   double* dvsD = nullptr;
+   const size_t slotBytes = (size_t)nblocks * 9 * sizeof(int);
+   const size_t vecBytes = (size_t)nblocks * 3 * sizeof(double);
+   const size_t dBytes = (size_t)nblocks * 36 * sizeof(double);
+   const size_t sigmaBytes = (size_t)nblocks * 6 * sizeof(double);
+   const size_t dvBytes = (size_t)nblocks * sizeof(double);
+   if (!cudaOk (cudaMalloc (&blockSlotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&gisD, vecBytes)) ||
+       !cudaOk (cudaMalloc (&gjsD, vecBytes)) ||
+       !cudaOk (cudaMalloc (&DsD, dBytes)) ||
+       !cudaOk (cudaMalloc (&sigmasD, sigmaBytes)) ||
+       !cudaOk (cudaMalloc (&dvsD, dvBytes))) {
+      if (blockSlotsD) cudaFree (blockSlotsD);
+      if (gisD) cudaFree (gisD);
+      if (gjsD) cudaFree (gjsD);
+      if (DsD) cudaFree (DsD);
+      if (sigmasD) cudaFree (sigmasD);
+      if (dvsD) cudaFree (dvsD);
+      myLastErr = "cudaMalloc failed in addMaterialStiffness3DeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_ALLOC;
+   }
+   if (!cudaOk (cudaMemcpyAsync (
+          blockSlotsD, blockSlots, slotBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          gisD, gis, vecBytes, cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          gjsD, gjs, vecBytes, cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          DsD, Ds, dBytes, cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          sigmasD, sigmas, sigmaBytes, cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          dvsD, dvs, dvBytes, cudaMemcpyHostToDevice, myStream))) {
+      cudaFree (blockSlotsD);
+      cudaFree (gisD);
+      cudaFree (gjsD);
+      cudaFree (DsD);
+      cudaFree (sigmasD);
+      cudaFree (dvsD);
+      myLastErr =
+         "cudaMemcpyAsync failed in addMaterialStiffness3DeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   addMaterialStiffness3_launch (
+      nblocks, blockSlotsD, gisD, gjsD, DsD, sigmasD, dvsD,
+      scale, myValsD, myStream);
+   cudaError_t launchErr = cudaGetLastError();
+   cudaFree (blockSlotsD);
+   cudaFree (gisD);
+   cudaFree (gjsD);
+   cudaFree (DsD);
+   cudaFree (sigmasD);
+   cudaFree (dvsD);
+   if (!cudaOk (launchErr)) {
+      myLastErr = "addMaterialStiffness3 kernel launch failed";
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    myItDiagDirty = true;

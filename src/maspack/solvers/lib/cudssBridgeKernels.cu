@@ -158,3 +158,96 @@ extern "C" void addScaledBlock3_launch (
    addScaledBlock3Kernel<<<blocks, threads, 0, stream>>>(
       nblocks, blockSlots, blockVals, blockScales, globalScale, crsVals);
 }
+
+// Computes FemUtilities.addMaterialStiffness(K, gi, D, sig, gj, dv) for
+// each descriptor and scatters the resulting 3x3 block to CRS slots.
+__global__ static void addMaterialStiffness3Kernel (
+   int nblocks,
+   const int*    __restrict__ blockSlots,
+   const double* __restrict__ gis,
+   const double* __restrict__ gjs,
+   const double* __restrict__ Ds,
+   const double* __restrict__ sigmas,
+   const double* __restrict__ dvs,
+   double globalScale,
+   double*       __restrict__ crsVals) {
+   int b = blockIdx.x * blockDim.x + threadIdx.x;
+   if (b >= nblocks) {
+      return;
+   }
+   const double* D = Ds + 36*b;
+   const double* sig = sigmas + 6*b;
+   int vbase = 3*b;
+   int sbase = 9*b;
+
+   double gix = gis[vbase];
+   double giy = gis[vbase + 1];
+   double giz = gis[vbase + 2];
+   double gjx = gjs[vbase] * dvs[b];
+   double gjy = gjs[vbase + 1] * dvs[b];
+   double gjz = gjs[vbase + 2] * dvs[b];
+
+   double dm00 = D[0]*gjx  + D[3]*gjy  + D[5]*gjz;
+   double dm01 = D[1]*gjy  + D[3]*gjx  + D[4]*gjz;
+   double dm02 = D[2]*gjz  + D[4]*gjy  + D[5]*gjx;
+
+   double dm10 = D[6]*gjx  + D[9]*gjy  + D[11]*gjz;
+   double dm11 = D[7]*gjy  + D[9]*gjx  + D[10]*gjz;
+   double dm12 = D[8]*gjz  + D[10]*gjy + D[11]*gjx;
+
+   double dm20 = D[12]*gjx + D[15]*gjy + D[17]*gjz;
+   double dm21 = D[13]*gjy + D[15]*gjx + D[16]*gjz;
+   double dm22 = D[14]*gjz + D[16]*gjy + D[17]*gjx;
+
+   double dm30 = D[18]*gjx + D[21]*gjy + D[23]*gjz;
+   double dm31 = D[19]*gjy + D[21]*gjx + D[22]*gjz;
+   double dm32 = D[20]*gjz + D[22]*gjy + D[23]*gjx;
+
+   double dm40 = D[24]*gjx + D[27]*gjy + D[29]*gjz;
+   double dm41 = D[25]*gjy + D[27]*gjx + D[28]*gjz;
+   double dm42 = D[26]*gjz + D[28]*gjy + D[29]*gjx;
+
+   double dm50 = D[30]*gjx + D[33]*gjy + D[35]*gjz;
+   double dm51 = D[31]*gjy + D[33]*gjx + D[34]*gjz;
+   double dm52 = D[32]*gjz + D[34]*gjy + D[35]*gjx;
+
+   double K[9];
+   K[0] = gix*dm00 + giy*dm30 + giz*dm50;
+   K[1] = gix*dm01 + giy*dm31 + giz*dm51;
+   K[2] = gix*dm02 + giy*dm32 + giz*dm52;
+   K[3] = giy*dm10 + gix*dm30 + giz*dm40;
+   K[4] = giy*dm11 + gix*dm31 + giz*dm41;
+   K[5] = giy*dm12 + gix*dm32 + giz*dm42;
+   K[6] = giz*dm20 + giy*dm40 + gix*dm50;
+   K[7] = giz*dm21 + giy*dm41 + gix*dm51;
+   K[8] = giz*dm22 + giy*dm42 + gix*dm52;
+
+   double sx = sig[0]*gjs[vbase] + sig[3]*gjs[vbase + 1] +
+      sig[5]*gjs[vbase + 2];
+   double sy = sig[3]*gjs[vbase] + sig[1]*gjs[vbase + 1] +
+      sig[4]*gjs[vbase + 2];
+   double sz = sig[5]*gjs[vbase] + sig[4]*gjs[vbase + 1] +
+      sig[2]*gjs[vbase + 2];
+   double Kg = (gix*sx + giy*sy + giz*sz) * dvs[b];
+   K[0] += Kg;
+   K[4] += Kg;
+   K[8] += Kg;
+
+   for (int j = 0; j < 9; j++) {
+      int slot = blockSlots[sbase + j];
+      if (slot >= 0) {
+         atomicAdd (&crsVals[slot], globalScale * K[j]);
+      }
+   }
+}
+
+extern "C" void addMaterialStiffness3_launch (
+   int nblocks, const int* blockSlots, const double* gis,
+   const double* gjs, const double* Ds, const double* sigmas,
+   const double* dvs, double globalScale, double* crsVals,
+   cudaStream_t stream) {
+   const int threads = 256;
+   const int blocks  = (nblocks + threads - 1) / threads;
+   addMaterialStiffness3Kernel<<<blocks, threads, 0, stream>>>(
+      nblocks, blockSlots, gis, gjs, Ds, sigmas, dvs, globalScale, crsVals);
+}
