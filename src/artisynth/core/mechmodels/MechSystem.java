@@ -44,6 +44,13 @@ public interface MechSystem {
       private double[] myScaledBlock3Values;
       private double[] myScaledBlock3Scales;
       private int myNumScaledBlock3Contributions;
+      private int[] myMaterialStiffness3Slots;
+      private double[] myMaterialStiffness3Gis;
+      private double[] myMaterialStiffness3Gjs;
+      private double[] myMaterialStiffness3Ds;
+      private double[] myMaterialStiffness3Sigmas;
+      private double[] myMaterialStiffness3Dvs;
+      private int myNumMaterialStiffness3Contributions;
       private int myStructureVersion;
 
       public GpuAssemblyContext (
@@ -70,6 +77,13 @@ public interface MechSystem {
          myScaledBlock3Values = new double[0];
          myScaledBlock3Scales = new double[0];
          myNumScaledBlock3Contributions = 0;
+         myMaterialStiffness3Slots = new int[0];
+         myMaterialStiffness3Gis = new double[0];
+         myMaterialStiffness3Gjs = new double[0];
+         myMaterialStiffness3Ds = new double[0];
+         myMaterialStiffness3Sigmas = new double[0];
+         myMaterialStiffness3Dvs = new double[0];
+         myNumMaterialStiffness3Contributions = 0;
       }
 
       public SparseNumberedBlockMatrix getMatrix() {
@@ -92,6 +106,7 @@ public interface MechSystem {
          myNumCrsValueContributions = 0;
          myNumScaledDiagonal3Contributions = 0;
          myNumScaledBlock3Contributions = 0;
+         myNumMaterialStiffness3Contributions = 0;
       }
 
       public void addCrsValueContribution (int slot, double value) {
@@ -180,6 +195,161 @@ public interface MechSystem {
          myNumScaledBlock3Contributions++;
       }
 
+      public void addMaterialStiffness3CrsValueContribution (
+         int blkNum, Vector3d gi, Matrix6d D, SymmetricMatrix3d sig,
+         Vector3d gj, double dv) {
+
+         if (blkNum == -1 || gi == null || D == null || sig == null ||
+             gj == null || dv == 0) {
+            return;
+         }
+         if (!mySlotMap.hasBlockSlots (blkNum)) {
+            return;
+         }
+         ensureMaterialStiffness3ContributionCapacity (
+            myNumMaterialStiffness3Contributions+1);
+         int slotIdx = 9*myNumMaterialStiffness3Contributions;
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 0, 0);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 0, 1);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 0, 2);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 1, 0);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 1, 1);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 1, 2);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 2, 0);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 2, 1);
+         myMaterialStiffness3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 2, 2);
+
+         int vecIdx = 3*myNumMaterialStiffness3Contributions;
+         myMaterialStiffness3Gis[vecIdx] = gi.x;
+         myMaterialStiffness3Gis[vecIdx+1] = gi.y;
+         myMaterialStiffness3Gis[vecIdx+2] = gi.z;
+         myMaterialStiffness3Gjs[vecIdx] = gj.x;
+         myMaterialStiffness3Gjs[vecIdx+1] = gj.y;
+         myMaterialStiffness3Gjs[vecIdx+2] = gj.z;
+
+         int dIdx = 36*myNumMaterialStiffness3Contributions;
+         myMaterialStiffness3Ds[dIdx++] = D.m00;
+         myMaterialStiffness3Ds[dIdx++] = D.m01;
+         myMaterialStiffness3Ds[dIdx++] = D.m02;
+         myMaterialStiffness3Ds[dIdx++] = D.m03;
+         myMaterialStiffness3Ds[dIdx++] = D.m04;
+         myMaterialStiffness3Ds[dIdx++] = D.m05;
+         myMaterialStiffness3Ds[dIdx++] = D.m10;
+         myMaterialStiffness3Ds[dIdx++] = D.m11;
+         myMaterialStiffness3Ds[dIdx++] = D.m12;
+         myMaterialStiffness3Ds[dIdx++] = D.m13;
+         myMaterialStiffness3Ds[dIdx++] = D.m14;
+         myMaterialStiffness3Ds[dIdx++] = D.m15;
+         myMaterialStiffness3Ds[dIdx++] = D.m20;
+         myMaterialStiffness3Ds[dIdx++] = D.m21;
+         myMaterialStiffness3Ds[dIdx++] = D.m22;
+         myMaterialStiffness3Ds[dIdx++] = D.m23;
+         myMaterialStiffness3Ds[dIdx++] = D.m24;
+         myMaterialStiffness3Ds[dIdx++] = D.m25;
+         myMaterialStiffness3Ds[dIdx++] = D.m30;
+         myMaterialStiffness3Ds[dIdx++] = D.m31;
+         myMaterialStiffness3Ds[dIdx++] = D.m32;
+         myMaterialStiffness3Ds[dIdx++] = D.m33;
+         myMaterialStiffness3Ds[dIdx++] = D.m34;
+         myMaterialStiffness3Ds[dIdx++] = D.m35;
+         myMaterialStiffness3Ds[dIdx++] = D.m40;
+         myMaterialStiffness3Ds[dIdx++] = D.m41;
+         myMaterialStiffness3Ds[dIdx++] = D.m42;
+         myMaterialStiffness3Ds[dIdx++] = D.m43;
+         myMaterialStiffness3Ds[dIdx++] = D.m44;
+         myMaterialStiffness3Ds[dIdx++] = D.m45;
+         myMaterialStiffness3Ds[dIdx++] = D.m50;
+         myMaterialStiffness3Ds[dIdx++] = D.m51;
+         myMaterialStiffness3Ds[dIdx++] = D.m52;
+         myMaterialStiffness3Ds[dIdx++] = D.m53;
+         myMaterialStiffness3Ds[dIdx++] = D.m54;
+         myMaterialStiffness3Ds[dIdx++] = D.m55;
+
+         int sigIdx = 6*myNumMaterialStiffness3Contributions;
+         myMaterialStiffness3Sigmas[sigIdx] = sig.m00;
+         myMaterialStiffness3Sigmas[sigIdx+1] = sig.m11;
+         myMaterialStiffness3Sigmas[sigIdx+2] = sig.m22;
+         myMaterialStiffness3Sigmas[sigIdx+3] = sig.m01;
+         myMaterialStiffness3Sigmas[sigIdx+4] = sig.m12;
+         myMaterialStiffness3Sigmas[sigIdx+5] = sig.m02;
+         myMaterialStiffness3Dvs[
+            myNumMaterialStiffness3Contributions] = dv;
+
+         addMaterialStiffness3ToCrsValues (
+            9*myNumMaterialStiffness3Contributions, gi, D, sig, gj, dv);
+         myNumMaterialStiffness3Contributions++;
+      }
+
+      private void addMaterialStiffness3ToCrsValues (
+         int slotBase, Vector3d gi, Matrix6d D, SymmetricMatrix3d sig,
+         Vector3d gj, double dv) {
+
+         double gjx = gj.x*dv;
+         double gjy = gj.y*dv;
+         double gjz = gj.z*dv;
+
+         double dm00 = D.m00*gjx + D.m03*gjy + D.m05*gjz;
+         double dm01 = D.m01*gjy + D.m03*gjx + D.m04*gjz;
+         double dm02 = D.m02*gjz + D.m04*gjy + D.m05*gjx;
+
+         double dm10 = D.m10*gjx + D.m13*gjy + D.m15*gjz;
+         double dm11 = D.m11*gjy + D.m13*gjx + D.m14*gjz;
+         double dm12 = D.m12*gjz + D.m14*gjy + D.m15*gjx;
+
+         double dm20 = D.m20*gjx + D.m23*gjy + D.m25*gjz;
+         double dm21 = D.m21*gjy + D.m23*gjx + D.m24*gjz;
+         double dm22 = D.m22*gjz + D.m24*gjy + D.m25*gjx;
+
+         double dm30 = D.m30*gjx + D.m33*gjy + D.m35*gjz;
+         double dm31 = D.m31*gjy + D.m33*gjx + D.m34*gjz;
+         double dm32 = D.m32*gjz + D.m34*gjy + D.m35*gjx;
+
+         double dm40 = D.m40*gjx + D.m43*gjy + D.m45*gjz;
+         double dm41 = D.m41*gjy + D.m43*gjx + D.m44*gjz;
+         double dm42 = D.m42*gjz + D.m44*gjy + D.m45*gjx;
+
+         double dm50 = D.m50*gjx + D.m53*gjy + D.m55*gjz;
+         double dm51 = D.m51*gjy + D.m53*gjx + D.m54*gjz;
+         double dm52 = D.m52*gjz + D.m54*gjy + D.m55*gjx;
+
+         double gix = gi.x;
+         double giy = gi.y;
+         double giz = gi.z;
+         double[] K = new double[9];
+         K[0] = gix*dm00 + giy*dm30 + giz*dm50;
+         K[1] = gix*dm01 + giy*dm31 + giz*dm51;
+         K[2] = gix*dm02 + giy*dm32 + giz*dm52;
+         K[3] = giy*dm10 + gix*dm30 + giz*dm40;
+         K[4] = giy*dm11 + gix*dm31 + giz*dm41;
+         K[5] = giy*dm12 + gix*dm32 + giz*dm42;
+         K[6] = giz*dm20 + giy*dm40 + gix*dm50;
+         K[7] = giz*dm21 + giy*dm41 + gix*dm51;
+         K[8] = giz*dm22 + giy*dm42 + gix*dm52;
+
+         double Kg = (
+            gi.x*(sig.m00*gj.x + sig.m01*gj.y + sig.m02*gj.z) +
+            gi.y*(sig.m10*gj.x + sig.m11*gj.y + sig.m12*gj.z) +
+            gi.z*(sig.m20*gj.x + sig.m21*gj.y + sig.m22*gj.z))*dv;
+         K[0] += Kg;
+         K[4] += Kg;
+         K[8] += Kg;
+         for (int i=0; i<9; i++) {
+            int slot = myMaterialStiffness3Slots[slotBase+i];
+            if (slot >= 0) {
+               myCrsValues[slot] += K[i];
+            }
+         }
+      }
+
       private void ensureCrsValueContributionCapacity (int cap) {
          if (myCrsValueSlots.length < cap) {
             int newCap = Math.max (cap, Math.max (64, 2*myCrsValueSlots.length));
@@ -210,6 +380,25 @@ public interface MechSystem {
                Arrays.copyOf (myScaledBlock3Values, 9*newCap);
             myScaledBlock3Scales =
                Arrays.copyOf (myScaledBlock3Scales, newCap);
+         }
+      }
+
+      private void ensureMaterialStiffness3ContributionCapacity (int cap) {
+         if (myMaterialStiffness3Dvs.length < cap) {
+            int newCap =
+               Math.max (cap, Math.max (64, 2*myMaterialStiffness3Dvs.length));
+            myMaterialStiffness3Slots =
+               Arrays.copyOf (myMaterialStiffness3Slots, 9*newCap);
+            myMaterialStiffness3Gis =
+               Arrays.copyOf (myMaterialStiffness3Gis, 3*newCap);
+            myMaterialStiffness3Gjs =
+               Arrays.copyOf (myMaterialStiffness3Gjs, 3*newCap);
+            myMaterialStiffness3Ds =
+               Arrays.copyOf (myMaterialStiffness3Ds, 36*newCap);
+            myMaterialStiffness3Sigmas =
+               Arrays.copyOf (myMaterialStiffness3Sigmas, 6*newCap);
+            myMaterialStiffness3Dvs =
+               Arrays.copyOf (myMaterialStiffness3Dvs, newCap);
          }
       }
 
@@ -253,18 +442,48 @@ public interface MechSystem {
          return myScaledBlock3Scales;
       }
 
+      public int numMaterialStiffness3Contributions() {
+         return myNumMaterialStiffness3Contributions;
+      }
+
+      public int[] getMaterialStiffness3ContributionSlots() {
+         return myMaterialStiffness3Slots;
+      }
+
+      public double[] getMaterialStiffness3Gis() {
+         return myMaterialStiffness3Gis;
+      }
+
+      public double[] getMaterialStiffness3Gjs() {
+         return myMaterialStiffness3Gjs;
+      }
+
+      public double[] getMaterialStiffness3Ds() {
+         return myMaterialStiffness3Ds;
+      }
+
+      public double[] getMaterialStiffness3Sigmas() {
+         return myMaterialStiffness3Sigmas;
+      }
+
+      public double[] getMaterialStiffness3Dvs() {
+         return myMaterialStiffness3Dvs;
+      }
+
       public boolean hasCpuGeneratedMatrixContributions() {
          return (myNumCrsValueContributions > 0 ||
                  myNumScaledDiagonal3Contributions > 0 ||
-                 myNumScaledBlock3Contributions > 0);
+                 myNumScaledBlock3Contributions > 0 ||
+                 myNumMaterialStiffness3Contributions > 0);
       }
 
       public String getContributionSummary() {
          return String.format (
-            "generic=%d diag3=%d block3=%d",
+            "generic=%d diag3=%d block3=%d material3=%d",
             myNumCrsValueContributions,
             myNumScaledDiagonal3Contributions,
-            myNumScaledBlock3Contributions);
+            myNumScaledBlock3Contributions,
+            myNumMaterialStiffness3Contributions);
       }
 
       /**

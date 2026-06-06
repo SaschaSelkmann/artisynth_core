@@ -1905,6 +1905,15 @@ public class MechSystemSolver {
                      directCrsContext.getScaledBlock3Contributions(),
                      directCrsContext.getScaledBlock3ContributionScales(),
                      directCrsContext.numScaledBlock3Contributions(), 1.0);
+                  cudss.addMaterialStiffness3DeviceValues (
+                     directCrsContext.getMaterialStiffness3ContributionSlots(),
+                     directCrsContext.getMaterialStiffness3Gis(),
+                     directCrsContext.getMaterialStiffness3Gjs(),
+                     directCrsContext.getMaterialStiffness3Ds(),
+                     directCrsContext.getMaterialStiffness3Sigmas(),
+                     directCrsContext.getMaterialStiffness3Dvs(),
+                     directCrsContext.numMaterialStiffness3Contributions(),
+                     1.0);
                   cudss.factorDeviceValues();
                }
                else {
@@ -2653,7 +2662,14 @@ public class MechSystemSolver {
                       kktMDeviceContext.getScaledBlock3ContributionSlots(),
                       kktMDeviceContext.getScaledBlock3Contributions(),
                       kktMDeviceContext.getScaledBlock3ContributionScales(),
-                      kktMDeviceContext.numScaledBlock3Contributions())) {
+                      kktMDeviceContext.numScaledBlock3Contributions(),
+                      kktMDeviceContext.getMaterialStiffness3ContributionSlots(),
+                      kktMDeviceContext.getMaterialStiffness3Gis(),
+                      kktMDeviceContext.getMaterialStiffness3Gjs(),
+                      kktMDeviceContext.getMaterialStiffness3Ds(),
+                      kktMDeviceContext.getMaterialStiffness3Sigmas(),
+                      kktMDeviceContext.getMaterialStiffness3Dvs(),
+                      kktMDeviceContext.numMaterialStiffness3Contributions())) {
                   myKKTSolver.solve (vel, myLam, bf, myBg);
                }
                else {
@@ -2693,7 +2709,14 @@ public class MechSystemSolver {
                       kktMDeviceContext.getScaledBlock3ContributionSlots(),
                       kktMDeviceContext.getScaledBlock3Contributions(),
                       kktMDeviceContext.getScaledBlock3ContributionScales(),
-                      kktMDeviceContext.numScaledBlock3Contributions())) {
+                      kktMDeviceContext.numScaledBlock3Contributions(),
+                      kktMDeviceContext.getMaterialStiffness3ContributionSlots(),
+                      kktMDeviceContext.getMaterialStiffness3Gis(),
+                      kktMDeviceContext.getMaterialStiffness3Gjs(),
+                      kktMDeviceContext.getMaterialStiffness3Ds(),
+                      kktMDeviceContext.getMaterialStiffness3Sigmas(),
+                      kktMDeviceContext.getMaterialStiffness3Dvs(),
+                      kktMDeviceContext.numMaterialStiffness3Contributions())) {
                   myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
                }
                maybeReportGpuAssemblyStatus (

@@ -620,7 +620,8 @@ public class KKTSolver {
 
       return factorDeviceMContributions (
          M, sizeM, GT, Rg, NT, Rn, mSlots, mVals, numMVals,
-         null, null, 0, null, null, null, 0);
+         null, null, 0, null, null, null, 0,
+         null, null, null, null, null, null, 0);
    }
 
    public boolean factorDeviceMContributions (
@@ -629,7 +630,9 @@ public class KKTSolver {
       int[] mSlots, double[] mVals, int numMVals,
       int[] diag3Slots, double[] diag3Vals, int numDiag3Vals,
       int[] block3Slots, double[] block3Vals, double[] block3Scales,
-      int numBlock3Vals) {
+      int numBlock3Vals,
+      int[] mat3Slots, double[] mat3Gis, double[] mat3Gjs, double[] mat3Ds,
+      double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals) {
 
       if (!canFactorDeviceMContributions()) {
          return false;
@@ -639,7 +642,9 @@ public class KKTSolver {
       factorMGDeviceMContributions (
          M, sizeM, GT, Rg, mSlots, mVals, numMVals,
          diag3Slots, diag3Vals, numDiag3Vals,
-         block3Slots, block3Vals, block3Scales, numBlock3Vals);
+         block3Slots, block3Vals, block3Scales, numBlock3Vals,
+         mat3Slots, mat3Gis, mat3Gjs, mat3Ds, mat3Sigmas, mat3Dvs,
+         numMat3Vals);
 
       if (NT != null && NT.colSize() != 0) {
          if ((myTypeM & Matrix.SYMMETRIC) == 0) {
@@ -1934,7 +1939,9 @@ public class KKTSolver {
       int[] mSlots, double[] mVals, int numMVals,
       int[] diag3Slots, double[] diag3Vals, int numDiag3Vals,
       int[] block3Slots, double[] block3Vals, double[] block3Scales,
-      int numBlock3Vals) {
+      int numBlock3Vals,
+      int[] mat3Slots, double[] mat3Gis, double[] mat3Gjs, double[] mat3Ds,
+      double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals) {
 
       if (myCuDss == null) {
          throw new ImproperStateException (
@@ -1952,6 +1959,11 @@ public class KKTSolver {
       if (numBlock3Vals > 0) {
          myCuDss.addScaledBlock3DeviceValues (
             block3Slots, block3Vals, block3Scales, numBlock3Vals, 1.0);
+      }
+      if (numMat3Vals > 0) {
+         myCuDss.addMaterialStiffness3DeviceValues (
+            mat3Slots, mat3Gis, mat3Gjs, mat3Ds, mat3Sigmas, mat3Dvs,
+            numMat3Vals, 1.0);
       }
       myCuDss.factorDeviceValues();
       myLastFactorUsedDeviceValues = true;

@@ -596,6 +596,79 @@ public class FemModel3dTest extends UnitTest {
          "position Jacobian CRS assembly", context.getCrsValues(), M);
    }
 
+   private void testMaterialStiffness3ContextAssembly() {
+      int[] sizes = new int[] { 3 };
+      SparseNumberedBlockMatrix M = new SparseNumberedBlockMatrix (sizes);
+      M.addBlock (0, 0, new Matrix3x3Block());
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+         M.createCrsBlockSlotMap (Matrix.Partition.Full);
+      MechSystem.GpuAssemblyContext context =
+         new MechSystem.GpuAssemblyContext (M, slotMap, 0);
+
+      Matrix6d D = new Matrix6d();
+      SymmetricMatrix3d sig = new SymmetricMatrix3d();
+      D.m00 = 4;
+      context.addMaterialStiffness3CrsValueContribution (
+         0, new Vector3d (1, 0, 0), D, sig, new Vector3d (1, 0, 0), 1);
+      D.setZero();
+      D.m11 = 5;
+      context.addMaterialStiffness3CrsValueContribution (
+         0, new Vector3d (0, 1, 0), D, sig, new Vector3d (0, 1, 0), 1);
+      D.setZero();
+      D.m22 = 6;
+      context.addMaterialStiffness3CrsValueContribution (
+         0, new Vector3d (0, 0, 1), D, sig, new Vector3d (0, 0, 1), 1);
+
+      double[] vals = context.getCrsValues();
+      double[] expected = new double[] { 4, 0, 0, 0, 5, 0, 0, 0, 6 };
+      for (int i=0; i<expected.length; i++) {
+         if (vals[i] != expected[i]) {
+            throw new TestException (
+               "material stiffness3 context value "+i+" is "+vals[i]+
+               ", expected "+expected[i]);
+         }
+      }
+      if (context.numMaterialStiffness3Contributions() != 3) {
+         throw new TestException (
+            "material stiffness3 descriptor count is "+
+            context.numMaterialStiffness3Contributions()+", expected 3");
+      }
+
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      maspack.solvers.CuDssSolver solver =
+         new maspack.solvers.CuDssSolver();
+      try {
+         solver.analyze (
+            vals, context.getZeroBasedCrsColIdxs(),
+            context.getZeroBasedCrsRowOffs(), 3, Matrix.INDEFINITE);
+         solver.clearDeviceValues();
+         solver.addMaterialStiffness3DeviceValues (
+            context.getMaterialStiffness3ContributionSlots(),
+            context.getMaterialStiffness3Gis(),
+            context.getMaterialStiffness3Gjs(),
+            context.getMaterialStiffness3Ds(),
+            context.getMaterialStiffness3Sigmas(),
+            context.getMaterialStiffness3Dvs(),
+            context.numMaterialStiffness3Contributions(), 1.0);
+         solver.factorDeviceValues();
+         double[] x = new double[3];
+         solver.solve (x, new double[] { 4, 10, 18 });
+         for (int i=0; i<3; i++) {
+            double exp = i + 1;
+            if (Math.abs (x[i] - exp) > 1e-10) {
+               throw new TestException (
+                  "material stiffness3 context solve x["+i+"]="+x[i]+
+                  ", expected "+exp);
+            }
+         }
+      }
+      finally {
+         solver.dispose();
+      }
+   }
+
    private void testBackwardEulerDirectCrsSolve() {
       if (!Boolean.getBoolean ("artisynth.gpuAssembly.directCrs") &&
           !Boolean.getBoolean ("artisynth.gpuAssembly.testCuDssAutoDirectCrs")) {
@@ -689,6 +762,7 @@ public class FemModel3dTest extends UnitTest {
    public void test() {
       //testFrameRelativeMass();
       testFemNeighborCrsAssembly();
+      testMaterialStiffness3ContextAssembly();
       testBackwardEulerDirectCrsSolve();
       testFindNearestElement();
       testSetNumbering();
