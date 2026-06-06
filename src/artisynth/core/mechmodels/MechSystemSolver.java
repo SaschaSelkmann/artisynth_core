@@ -840,6 +840,7 @@ public class MechSystemSolver {
       if (myUpdateForcesAtStepEnd) {
          myFcon.setZero();
       }
+      maybeProfileGpuAssemblySolveRoute();
       switch (myIntegrator) {
          case ForwardEuler: {
             forwardEuler (t0, t1, stepAdjust);
@@ -1130,6 +1131,71 @@ public class MechSystemSolver {
               myMatrixSolver == SparseSolverId.CuDss);
    }
 
+   private String getGpuAssemblyDirectCrsStatus (
+      boolean crsAssembled, int vsize,
+      MechSystem.GpuAssemblyContext context) {
+
+      if (!enableGpuAssemblyDirectCrs()) {
+         return "disabled";
+      }
+      if (!enableGpuAssembly()) {
+         return "gpuAssemblyDisabled";
+      }
+      if (!myUseDirectSolver) {
+         return "directSolverDisabled";
+      }
+      if (!(myDirectSolver instanceof CuDssSolver)) {
+         return "nonCuDssDirectSolver";
+      }
+      if (context == null) {
+         return "noCrsContext";
+      }
+      if (!crsAssembled) {
+         return "incompleteContributions";
+      }
+      if (context.getSlotMap().rowSize() != vsize ||
+          context.getSlotMap().colSize() != vsize) {
+         return "contextSizeMismatch";
+      }
+      return "ready";
+   }
+
+   private String describeGpuAssemblyDirectCrsStatus (String status) {
+      if ("disabled".equals (status)) {
+         return "direct CRS is disabled";
+      }
+      else if ("gpuAssemblyDisabled".equals (status)) {
+         return "GPU assembly is disabled";
+      }
+      else if ("directSolverDisabled".equals (status)) {
+         return "the direct solver is disabled";
+      }
+      else if ("nonCuDssDirectSolver".equals (status)) {
+         return "the selected direct solver is not cuDSS";
+      }
+      else if ("noCrsContext".equals (status)) {
+         return "no CRS context was available";
+      }
+      else if ("incompleteContributions".equals (status)) {
+         return "direct CRS values were not fully assembled";
+      }
+      else if ("contextSizeMismatch".equals (status)) {
+         return "the CRS context is not the active solve submatrix";
+      }
+      return status;
+   }
+
+   private void maybeProfileGpuAssemblySolveRoute() {
+      if (profileGpuAssembly && enableGpuAssemblyDirectCrs() &&
+          myIntegrator != Integrator.BackwardEuler) {
+         System.out.printf (
+            "[gpu-assembly-profile] solver=%s route integrator=%s "+
+            "matrixSolver=%s directCrs=false "+
+            "directCrsStatus=integrator%s%n",
+            profileName(), myIntegrator, myMatrixSolver, myIntegrator);
+      }
+   }
+
    private void maybeWarnGpuAssemblyFallback (String phase) {
       if (!myWarnedGpuAssemblyFallback) {
          System.out.println (
@@ -1394,26 +1460,16 @@ public class MechSystemSolver {
       boolean crsAssembled, int vsize,
       MechSystem.GpuAssemblyContext context) {
 
-      if (!enableGpuAssemblyDirectCrs()) {
-         return false;
+      String status = getGpuAssemblyDirectCrsStatus (
+         crsAssembled, vsize, context);
+      if ("ready".equals (status)) {
+         return true;
       }
-      if (!crsAssembled) {
+      if (enableGpuAssemblyDirectCrs()) {
          maybeWarnGpuAssemblyDirectCrsFallback (
-            "direct CRS values were not fully assembled");
-         return false;
+            describeGpuAssemblyDirectCrsStatus (status));
       }
-      if (!(myDirectSolver instanceof CuDssSolver)) {
-         maybeWarnGpuAssemblyDirectCrsFallback (
-            "the selected direct solver is not cuDSS");
-         return false;
-      }
-      if (context.getSlotMap().rowSize() != vsize ||
-          context.getSlotMap().colSize() != vsize) {
-         maybeWarnGpuAssemblyDirectCrsFallback (
-            "the CRS context is not the active solve submatrix");
-         return false;
-      }
-      return true;
+      return false;
    }
 
    private void mulAddCrsValues (
@@ -1649,6 +1705,10 @@ public class MechSystemSolver {
       boolean useDirectCrs =
          myUseDirectSolver && canUseGpuAssemblyDirectCrs (
             crsVerified, vsize, directCrsContext);
+      String directCrsStatus = useDirectCrs ?
+         (directCrsDeviceValuesReady ? "deviceValues" : "hostValues") :
+         getGpuAssemblyDirectCrsStatus (
+            crsVerified, vsize, directCrsContext);
       long tAnalyze = tMass;
       if (mySolveMatrixVersion != myRegSolveMatrixVersion) {
          analyze = true;
@@ -1726,12 +1786,14 @@ public class MechSystemSolver {
             "matrixTotal=%.3fms zero=%.3fms addVelJac=%.3fms "+
             "mulJv=%.3fms addPosJac=%.3fms addMass=%.3fms "+
             "analyze=%.3fms solve=%.3fms analyzed=%b gpuVel=%b "+
-            "gpuPos=%b directCrs=%b vsize=%d nnz=%d%n",
+            "gpuPos=%b directCrs=%b deviceCrs=%b "+
+            "directCrsStatus=%s vsize=%d nnz=%d%n",
             profileName(), msec(tMass-tBuildStart), msec(tZero-tBuildStart),
             msec(tVelJac-tZero), msec(tMulJv-tVelJac),
             msec(tPosJac-tMulJv), msec(tMass-tPosJac),
             msec(tAnalyze-tMass), msec(tSolve-tAnalyze), analyze,
-            gpuVel, gpuPos, useDirectCrs, vsize,
+            gpuVel, gpuPos, useDirectCrs, directCrsDeviceValuesReady,
+            directCrsStatus, vsize,
             mySolveMatrix.numNonZeroVals());
       }
 
@@ -2243,7 +2305,8 @@ public class MechSystemSolver {
             "[gpu-assembly-profile] solver=%s kktBuild total=%.3fms "+
             "zero=%.3fms addVelJac=%.3fms mulImplicit=%.3fms "+
             "addPosJac=%.3fms addMass=%.3fms parametric=%.3fms "+
-            "gpuVel=%b gpuPos=%b velSize=%d nnz=%d%n",
+            "gpuVel=%b gpuPos=%b directCrs=false "+
+            "deviceCrs=false directCrsStatus=kktPath velSize=%d nnz=%d%n",
             profileName(), msec(tParametric-tBuildStart),
             msec(tZero-tBuildStart), msec(tVelJac-tZero),
             msec(tMul-tVelJac), msec(tPosJac-tMul),
