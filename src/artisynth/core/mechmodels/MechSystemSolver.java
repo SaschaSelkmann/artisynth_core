@@ -1399,6 +1399,59 @@ public class MechSystemSolver {
       }
    }
 
+   // Reads the GPU-assembled device CRS values back to the host and compares
+   // them, entry for entry, against a CPU reference assembled into the SAME
+   // context CRS value array (identical slot ordering to what the device
+   // kernels wrote). This is a true device-vs-CPU check of the GPU assembly
+   // (the descriptor marshalling AND the kernels), unlike checkGpuAssemblyCrsValues
+   // which only compares CPU context values against the CPU block matrix. Run
+   // per step when -Dartisynth.gpuAssembly.verifyCrs is set together with
+   // -Dartisynth.gpuAssembly.directCrs. Throws on mismatch so an assembly bug
+   // (e.g. a missing matrix triangle) is caught immediately rather than
+   // silently corrupting the solve.
+   private void verifyGpuDeviceCrsValues (
+      CuDssSolver cudss, MechSystem.GpuAssemblyContext context,
+      double h, String phase) {
+
+      int nnz = context.getCrsValues().length;
+      double[] gpuVals = new double[nnz];
+      cudss.getDeviceValues (gpuVals);
+
+      // CPU reference, assembled into the context's own CRS value array using
+      // the same scales as the device contributions (-h for the velocity
+      // Jacobian, -h*h for the position Jacobian, plus the active mass matrix).
+      context.clearCrsValues();
+      boolean complete = mySys.assembleGpuVelJacobianCrsValues (context, -h);
+      complete &= mySys.assembleGpuPosJacobianCrsValues (context, -h * h);
+      complete &= addActiveMassMatrixCrsValues (context);
+      if (!complete) {
+         maybeWarnGpuAssemblyCrsVerifyIncomplete (phase);
+         return;
+      }
+      double[] cpuVals = context.getCrsValues();
+
+      double ref = 0;
+      for (int i=0; i<nnz; i++) {
+         ref = Math.max (ref, Math.abs (cpuVals[i]));
+      }
+      double tol = Math.max (1e-9, 1e-9*ref);
+      double maxErr = 0;
+      int maxIdx = -1;
+      for (int i=0; i<nnz; i++) {
+         double err = Math.abs (gpuVals[i]-cpuVals[i]);
+         if (err > maxErr) {
+            maxErr = err;
+            maxIdx = i;
+         }
+      }
+      if (maxErr > tol) {
+         throw new InternalErrorException (
+            "GPU device CRS verification failed for "+phase+
+            ": max error "+maxErr+" at CRS value "+maxIdx+
+            " (tol="+tol+", gpu="+gpuVals[maxIdx]+", cpu="+cpuVals[maxIdx]+")");
+      }
+   }
+
    private boolean verifyGpuVelJacobianCrs (double h, String phase) {
       if ((!verifyGpuAssemblyCrs && !enableGpuAssemblyDirectCrs()) ||
           !enableGpuAssembly()) {
@@ -1769,10 +1822,13 @@ public class MechSystemSolver {
       VectorNd directCrsPosForces = null;
       boolean gpuVel = false;
       boolean gpuPos = false;
+      // verifyGpuAssemblyCrs no longer disables the device path: when both
+      // directCrs and verifyCrs are set we want to RUN the device assembly and
+      // then check its read-back values against a CPU reference (see
+      // verifyGpuDeviceCrsValues, invoked just before factorDeviceValues).
       boolean tryDirectCrsOnly =
          directCrsContext != null &&
          enableGpuAssemblyDirectCrs() &&
-         !verifyGpuAssemblyCrs &&
          myUseDirectSolver &&
          myDirectSolver instanceof CuDssSolver;
 
@@ -2007,6 +2063,10 @@ public class MechSystemSolver {
                      directCrsContext.getDilationalStiffness3ElementRinvs(),
                      directCrsContext.numDilationalStiffness3ElementContributions(),
                      1.0);
+                  if (verifyGpuAssemblyCrs) {
+                     verifyGpuDeviceCrsValues (
+                        cudss, directCrsContext, h, "backwardEuler");
+                  }
                   cudss.factorDeviceValues();
                }
                else {
