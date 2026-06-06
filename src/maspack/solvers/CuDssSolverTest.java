@@ -561,6 +561,61 @@ public class CuDssSolverTest extends UnitTest {
       finally { s.dispose(); }
    }
 
+   private void testDilationalStiffness3ElementDeviceContribution() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         double[] zeroVals = { 0, 0, 0 };
+         int[] cols = { 0, 1, 2 };
+         int[] rows = { 0, 1, 2, 3 };
+         s.analyze (zeroVals, cols, rows, 3, Matrix.SPD);
+
+         int[] elemNodeCounts = { 3 };
+         int[] elemPressureCounts = { 3 };
+         int[] elemPairOffsets = { 0, 3 };
+         int[] elemConstraintOffsets = { 0, 9 };
+         int[] elemRinvOffsets = { 0, 9 };
+         int[] pairNodeIdxs = {
+            0, 0,
+            1, 1,
+            2, 2
+         };
+         int[] blockSlots = {
+             0, -1, -1,  -1, -1, -1,  -1, -1, -1,
+            -1, -1, -1,  -1,  1, -1,  -1, -1, -1,
+            -1, -1, -1,  -1, -1, -1,  -1, -1,  2
+         };
+         double[] constraints = {
+            1, 0, 0,  0, 0, 0,  0, 0, 0,
+            0, 0, 0,  0, 1, 0,  0, 0, 0,
+            0, 0, 0,  0, 0, 0,  0, 0, 1
+         };
+         double[] rinvs = {
+            4, 0, 0,
+            0, 5, 0,
+            0, 0, 6
+         };
+
+         s.clearDeviceValues();
+         s.addDilationalStiffness3ElementDeviceValues (
+            elemNodeCounts, elemPressureCounts, elemPairOffsets,
+            elemConstraintOffsets, elemRinvOffsets, pairNodeIdxs, blockSlots,
+            constraints, rinvs, 1, 1.0);
+         s.factorDeviceValues();
+
+         double[] x = new double[3];
+         s.solve (x, new double[] { 4, 10, 18 });
+         for (int i=0; i<3; i++) {
+            double expected = i + 1;
+            if (Math.abs (x[i] - expected) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "dilational stiffness3 element device contribution x[" + i +
+                  "]=" + x[i] + " expected " + expected);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
 
    // Refactor with same pattern via array entry points.
    private void testArrayCsrRefactor() {
@@ -777,6 +832,7 @@ public class CuDssSolverTest extends UnitTest {
       testScaledBlock3DeviceContribution();
       testMaterialStiffness3DeviceContribution();
       testMaterialStiffness3ElementDeviceContribution();
+      testDilationalStiffness3ElementDeviceContribution();
       testArrayCsrRefactor();
       testMultiRhsConsistency();
       testMultiRhsGrowShrink();

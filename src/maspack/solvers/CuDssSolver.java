@@ -107,6 +107,11 @@ public class CuDssSolver implements DirectSolver {
       int[] elemIpOffsets, int[] elemGradOffsets, int[] pairNodeIdxs,
       int[] blockSlots, double[] grads, double[] Ds, double[] sigmas,
       double[] dvs, int nelems, double scale);
+   private static native int    doAddDilationalStiffness3ElementDeviceValues (
+      long handle, int[] elemNodeCounts, int[] elemPressureCounts,
+      int[] elemPairOffsets, int[] elemConstraintOffsets,
+      int[] elemRinvOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      double[] constraints, double[] rinvs, int nelems, double scale);
    private static native int    doFactorDeviceValues (long handle);
    private static native int    doSolve   (long handle, double[] b, double[] x);
    private static native int    doSolveMulti (
@@ -561,6 +566,49 @@ public class CuDssSolver implements DirectSolver {
             elemGradOffsets, pairNodeIdxs, blockSlots, grads, Ds, sigmas,
             dvs, nelems, scale),
          "addMaterialStiffness3ElementDeviceValues");
+   }
+
+   /**
+    * Computes and adds compact element-batched dilational stiffness
+    * contributions on the GPU using
+    * {@code Kij += GT_i Rinv GT_j^T}. Each element stores node and pressure
+    * counts, node-pair CRS slots, a dense {@code Rinv}, and the 3 x np pressure
+    * constraint block for each element node.
+    */
+   public synchronized void addDilationalStiffness3ElementDeviceValues (
+      int[] elemNodeCounts, int[] elemPressureCounts,
+      int[] elemPairOffsets, int[] elemConstraintOffsets,
+      int[] elemRinvOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      double[] constraints, double[] rinvs, int nelems, double scale) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      if (nelems < 0 ||
+          nelems > elemNodeCounts.length ||
+          nelems > elemPressureCounts.length ||
+          nelems+1 > elemPairOffsets.length ||
+          nelems+1 > elemConstraintOffsets.length ||
+          nelems+1 > elemRinvOffsets.length) {
+         throw new IllegalArgumentException (
+            "nelems exceeds compact dilational element arrays");
+      }
+      int npairs = elemPairOffsets[nelems];
+      int nconstraints = elemConstraintOffsets[nelems];
+      int nrinv = elemRinvOffsets[nelems];
+      if (npairs < 0 || nconstraints < 0 || nrinv < 0 ||
+          npairs > pairNodeIdxs.length/2 ||
+          npairs > blockSlots.length/9 ||
+          nconstraints > constraints.length/3 ||
+          nrinv > rinvs.length) {
+         throw new IllegalArgumentException (
+            "compact dilational descriptor arrays are inconsistent");
+      }
+      check (
+         doAddDilationalStiffness3ElementDeviceValues (
+            myHandle, elemNodeCounts, elemPressureCounts, elemPairOffsets,
+            elemConstraintOffsets, elemRinvOffsets, pairNodeIdxs, blockSlots,
+            constraints, rinvs, nelems, scale),
+         "addDilationalStiffness3ElementDeviceValues");
    }
 
    /**

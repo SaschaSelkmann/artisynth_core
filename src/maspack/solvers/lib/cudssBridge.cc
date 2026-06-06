@@ -50,6 +50,13 @@ extern "C" void addMaterialStiffness3Element_launch (
    const int* pairNodeIdxs, const int* blockSlots, const double* grads,
    const double* Ds, const double* sigmas, const double* dvs,
    double globalScale, double* crsVals, cudaStream_t stream);
+extern "C" void addDilationalStiffness3Element_launch (
+   int nelems,
+   const int* elemNodeCounts, const int* elemPressureCounts,
+   const int* elemPairOffsets, const int* elemConstraintOffsets,
+   const int* elemRinvOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const double* constraints, const double* rinvs,
+   double globalScale, double* crsVals, cudaStream_t stream);
 
 void CuDssBridge::setTimingEnabled (bool on) {
    g_timing = on;
@@ -818,6 +825,134 @@ int CuDssBridge::addMaterialStiffness3ElementDeviceValues (
    cudaFree (dvsD);
    if (!cudaOk (launchErr)) {
       myLastErr = "addMaterialStiffness3Element kernel launch failed";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   myItDiagDirty = true;
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
+int CuDssBridge::addDilationalStiffness3ElementDeviceValues (
+   const int* elemNodeCounts, const int* elemPressureCounts,
+   const int* elemPairOffsets, const int* elemConstraintOffsets,
+   const int* elemRinvOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const double* constraints, const double* rinvs,
+   int nelems, double scale) {
+
+   if (!myHasPattern || !myValsD) {
+      myLastErr =
+         "addDilationalStiffness3ElementDeviceValues called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nelems < 0) {
+      myLastErr =
+         "addDilationalStiffness3ElementDeviceValues received a negative element count";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nelems == 0) {
+      myLastErr = nullptr;
+      return CUDSS_BRIDGE_OK;
+   }
+
+   int npairs = elemPairOffsets[nelems];
+   int nconstraints = elemConstraintOffsets[nelems];
+   int nrinv = elemRinvOffsets[nelems];
+   if (npairs == 0 || nconstraints == 0 || nrinv == 0) {
+      myLastErr = nullptr;
+      return CUDSS_BRIDGE_OK;
+   }
+
+   int *elemNodeCountsD = nullptr, *elemPressureCountsD = nullptr;
+   int *elemPairOffsetsD = nullptr, *elemConstraintOffsetsD = nullptr;
+   int *elemRinvOffsetsD = nullptr;
+   int *pairNodeIdxsD = nullptr, *blockSlotsD = nullptr;
+   double *constraintsD = nullptr, *rinvsD = nullptr;
+
+   const size_t elemBytes = (size_t)nelems * sizeof(int);
+   const size_t elemOffBytes = (size_t)(nelems + 1) * sizeof(int);
+   const size_t pairIdxBytes = (size_t)npairs * 2 * sizeof(int);
+   const size_t slotBytes = (size_t)npairs * 9 * sizeof(int);
+   const size_t constraintBytes = (size_t)nconstraints * 3 * sizeof(double);
+   const size_t rinvBytes = (size_t)nrinv * sizeof(double);
+
+   if (!cudaOk (cudaMalloc (&elemNodeCountsD, elemBytes)) ||
+       !cudaOk (cudaMalloc (&elemPressureCountsD, elemBytes)) ||
+       !cudaOk (cudaMalloc (&elemPairOffsetsD, elemOffBytes)) ||
+       !cudaOk (cudaMalloc (&elemConstraintOffsetsD, elemOffBytes)) ||
+       !cudaOk (cudaMalloc (&elemRinvOffsetsD, elemOffBytes)) ||
+       !cudaOk (cudaMalloc (&pairNodeIdxsD, pairIdxBytes)) ||
+       !cudaOk (cudaMalloc (&blockSlotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&constraintsD, constraintBytes)) ||
+       !cudaOk (cudaMalloc (&rinvsD, rinvBytes))) {
+      if (elemNodeCountsD) cudaFree (elemNodeCountsD);
+      if (elemPressureCountsD) cudaFree (elemPressureCountsD);
+      if (elemPairOffsetsD) cudaFree (elemPairOffsetsD);
+      if (elemConstraintOffsetsD) cudaFree (elemConstraintOffsetsD);
+      if (elemRinvOffsetsD) cudaFree (elemRinvOffsetsD);
+      if (pairNodeIdxsD) cudaFree (pairNodeIdxsD);
+      if (blockSlotsD) cudaFree (blockSlotsD);
+      if (constraintsD) cudaFree (constraintsD);
+      if (rinvsD) cudaFree (rinvsD);
+      myLastErr =
+         "cudaMalloc failed in addDilationalStiffness3ElementDeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_ALLOC;
+   }
+
+   if (!cudaOk (cudaMemcpyAsync (
+          elemNodeCountsD, elemNodeCounts, elemBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemPressureCountsD, elemPressureCounts, elemBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemPairOffsetsD, elemPairOffsets, elemOffBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemConstraintOffsetsD, elemConstraintOffsets, elemOffBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemRinvOffsetsD, elemRinvOffsets, elemOffBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          pairNodeIdxsD, pairNodeIdxs, pairIdxBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          blockSlotsD, blockSlots, slotBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          constraintsD, constraints, constraintBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          rinvsD, rinvs, rinvBytes, cudaMemcpyHostToDevice, myStream))) {
+      cudaFree (elemNodeCountsD);
+      cudaFree (elemPressureCountsD);
+      cudaFree (elemPairOffsetsD);
+      cudaFree (elemConstraintOffsetsD);
+      cudaFree (elemRinvOffsetsD);
+      cudaFree (pairNodeIdxsD);
+      cudaFree (blockSlotsD);
+      cudaFree (constraintsD);
+      cudaFree (rinvsD);
+      myLastErr =
+         "cudaMemcpyAsync failed in addDilationalStiffness3ElementDeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   addDilationalStiffness3Element_launch (
+      nelems, elemNodeCountsD, elemPressureCountsD, elemPairOffsetsD,
+      elemConstraintOffsetsD, elemRinvOffsetsD, pairNodeIdxsD, blockSlotsD,
+      constraintsD, rinvsD, scale, myValsD, myStream);
+   cudaError_t launchErr = cudaGetLastError();
+   cudaFree (elemNodeCountsD);
+   cudaFree (elemPressureCountsD);
+   cudaFree (elemPairOffsetsD);
+   cudaFree (elemConstraintOffsetsD);
+   cudaFree (elemRinvOffsetsD);
+   cudaFree (pairNodeIdxsD);
+   cudaFree (blockSlotsD);
+   cudaFree (constraintsD);
+   cudaFree (rinvsD);
+   if (!cudaOk (launchErr)) {
+      myLastErr = "addDilationalStiffness3Element kernel launch failed";
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    myItDiagDirty = true;

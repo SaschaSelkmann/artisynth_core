@@ -4265,7 +4265,14 @@ PointAttachable, ConnectableBody {
       int totalPairs = 0;
       int totalIps = 0;
       int totalGradVecs = 0;
+      int totalDilElems = 0;
+      int totalDilPairs = 0;
+      int totalDilConstraintVecs = 0;
+      int totalDilRinvVals = 0;
       for (FemElement3d e : myElements) {
+         FemMaterial mat = getElementMaterial(e);
+         IncompMethod elemSoftIncomp =
+            mat.isIncompressible() ? softIncomp : IncompMethod.OFF;
          int npairs = 0;
          for (int i = 0; i < e.myNodes.length; i++) {
             int bi = e.myNodes[i].getLocalSolveIndex();
@@ -4281,6 +4288,13 @@ PointAttachable, ConnectableBody {
          totalPairs += npairs;
          totalIps += e.getIntegrationPoints().length;
          totalGradVecs += e.getIntegrationPoints().length * e.myNodes.length;
+         if (elemSoftIncomp == IncompMethod.ELEMENT) {
+            int npvals = e.numPressureVals();
+            totalDilElems++;
+            totalDilPairs += npairs;
+            totalDilConstraintVecs += e.myNodes.length*npvals;
+            totalDilRinvVals += npvals*npvals;
+         }
       }
       int[] elemNodeCounts = new int[nelems];
       int[] elemPairOffsets = new int[nelems+1];
@@ -4292,11 +4306,24 @@ PointAttachable, ConnectableBody {
       double[] Ds = new double[36*totalIps];
       double[] sigmas = new double[6*totalIps];
       double[] dvs = new double[totalIps];
+      int[] dilElemNodeCounts = new int[totalDilElems];
+      int[] dilElemPressureCounts = new int[totalDilElems];
+      int[] dilElemPairOffsets = new int[totalDilElems+1];
+      int[] dilElemConstraintOffsets = new int[totalDilElems+1];
+      int[] dilElemRinvOffsets = new int[totalDilElems+1];
+      int[] dilPairNodeIdxs = new int[2*totalDilPairs];
+      int[] dilBlockSlots = new int[9*totalDilPairs];
+      double[] dilConstraints = new double[3*totalDilConstraintVecs];
+      double[] dilRinvs = new double[totalDilRinvVals];
 
       int elemIdx = 0;
       int pairIdx = 0;
       int ipIdx = 0;
       int gradVecIdx = 0;
+      int dilElemIdx = 0;
+      int dilPairIdx = 0;
+      int dilConstraintVecIdx = 0;
+      int dilRinvIdx = 0;
       for (FemElement3d e : myElements) {
          FemMaterial mat = getElementMaterial(e);
          IncompMethod elemSoftIncomp =
@@ -4312,6 +4339,13 @@ PointAttachable, ConnectableBody {
          elemPairOffsets[elemIdx] = pairIdx;
          elemIpOffsets[elemIdx] = ipIdx;
          elemGradOffsets[elemIdx] = gradVecIdx;
+         if (elemSoftIncomp == IncompMethod.ELEMENT) {
+            dilElemNodeCounts[dilElemIdx] = e.myNodes.length;
+            dilElemPressureCounts[dilElemIdx] = e.numPressureVals();
+            dilElemPairOffsets[dilElemIdx] = dilPairIdx;
+            dilElemConstraintOffsets[dilElemIdx] = dilConstraintVecIdx;
+            dilElemRinvOffsets[dilElemIdx] = dilRinvIdx;
+         }
          for (int i = 0; i < e.myNodes.length; i++) {
             int bi = e.myNodes[i].getLocalSolveIndex();
             if (bi != -1) {
@@ -4342,6 +4376,39 @@ PointAttachable, ConnectableBody {
                      blockSlots[slotBase++] =
                         context.getSlotMap().getBlockValueSlot (blkNum, 2, 2);
                      pairIdx++;
+                     if (elemSoftIncomp == IncompMethod.ELEMENT) {
+                        dilPairNodeIdxs[2*dilPairIdx] = i;
+                        dilPairNodeIdxs[2*dilPairIdx+1] = j;
+                        int dilSlotBase = 9*dilPairIdx;
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 0, 0);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 0, 1);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 0, 2);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 1, 0);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 1, 1);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 1, 2);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 2, 0);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 2, 1);
+                        dilBlockSlots[dilSlotBase++] =
+                           context.getSlotMap().getBlockValueSlot (
+                              blkNum, 2, 2);
+                        dilPairIdx++;
+                     }
                   }
                }
             }
@@ -4422,22 +4489,24 @@ PointAttachable, ConnectableBody {
          }
 
          if (elemSoftIncomp == IncompMethod.ELEMENT) {
-            Matrix3d K = new Matrix3d();
+            int npvals = e.numPressureVals();
             for (int i = 0; i < e.myNodes.length; i++) {
-               int bi = e.myNodes[i].getLocalSolveIndex();
-               if (bi != -1) {
-                  for (int j = 0; j < e.myNodes.length; j++) {
-                     int bj = e.myNodes[j].getLocalSolveIndex();
-                     if (!mySolveMatrixSymmetricP || bj >= bi) {
-                        K.setZero();
-                        FemUtilities.addDilationalStiffness (
-                           K, myRinv, constraints[i], constraints[j]);
-                        context.addScaledBlock3CrsValueContribution (
-                           e.myNbrs[i][j].getBlockNumber(), s, K);
-                     }
-                  }
+               for (int a=0; a<npvals; a++) {
+                  int cbase = 3*dilConstraintVecIdx++;
+                  dilConstraints[cbase] = constraints[i].get (0, a);
+                  dilConstraints[cbase+1] = constraints[i].get (1, a);
+                  dilConstraints[cbase+2] = constraints[i].get (2, a);
                }
             }
+            for (int a=0; a<npvals; a++) {
+               for (int b=0; b<npvals; b++) {
+                  dilRinvs[dilRinvIdx++] = s*myRinv.get (a, b);
+               }
+            }
+            dilElemPairOffsets[dilElemIdx+1] = dilPairIdx;
+            dilElemConstraintOffsets[dilElemIdx+1] = dilConstraintVecIdx;
+            dilElemRinvOffsets[dilElemIdx+1] = dilRinvIdx;
+            dilElemIdx++;
          }
          elemIdx++;
       }
@@ -4447,6 +4516,10 @@ PointAttachable, ConnectableBody {
       context.addMaterialStiffness3ElementCrsValueContributions (
          elemNodeCounts, elemPairOffsets, elemIpOffsets, elemGradOffsets,
          pairNodeIdxs, blockSlots, grads, Ds, sigmas, dvs, nelems);
+      context.addDilationalStiffness3ElementCrsValueContributions (
+         dilElemNodeCounts, dilElemPressureCounts, dilElemPairOffsets,
+         dilElemConstraintOffsets, dilElemRinvOffsets, dilPairNodeIdxs,
+         dilBlockSlots, dilConstraints, dilRinvs, dilElemIdx);
       return true;
    }
 

@@ -103,6 +103,12 @@ public:
       const int* pairNodeIdxs, const int* blockSlots, const double* grads,
       const double* Ds, const double* sigmas, const double* dvs,
       int nelems, double scale);
+   int addDilationalStiffness3ElementDeviceValues (
+      const int* elemNodeCounts, const int* elemPressureCounts,
+      const int* elemPairOffsets, const int* elemConstraintOffsets,
+      const int* elemRinvOffsets, const int* pairNodeIdxs,
+      const int* blockSlots, const double* constraints, const double* rinvs,
+      int nelems, double scale);
    int factorDeviceValues();
 
    // Copy b[] H->D, run CUDSS_PHASE_SOLVE, copy x[] D->H. Both arrays length n.

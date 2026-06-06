@@ -269,6 +269,93 @@ Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3ElementDeviceValues
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL
+Java_maspack_solvers_CuDssSolver_doAddDilationalStiffness3ElementDeviceValues
+  (JNIEnv* env, jclass /*cls*/, jlong handle,
+   jintArray elemNodeCounts, jintArray elemPressureCounts,
+   jintArray elemPairOffsets, jintArray elemConstraintOffsets,
+   jintArray elemRinvOffsets, jintArray pairNodeIdxs,
+   jintArray blockSlots, jdoubleArray constraints, jdoubleArray rinvs,
+   jint nelems, jdouble scale) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   jint* elemNodeCountsP =
+      env->GetIntArrayElements (elemNodeCounts, nullptr);
+   jint* elemPressureCountsP =
+      env->GetIntArrayElements (elemPressureCounts, nullptr);
+   jint* elemPairOffsetsP =
+      env->GetIntArrayElements (elemPairOffsets, nullptr);
+   jint* elemConstraintOffsetsP =
+      env->GetIntArrayElements (elemConstraintOffsets, nullptr);
+   jint* elemRinvOffsetsP =
+      env->GetIntArrayElements (elemRinvOffsets, nullptr);
+   jint* pairNodeIdxsP = env->GetIntArrayElements (pairNodeIdxs, nullptr);
+   jint* blockSlotsP = env->GetIntArrayElements (blockSlots, nullptr);
+   jdouble* constraintsP =
+      env->GetDoubleArrayElements (constraints, nullptr);
+   jdouble* rinvsP = env->GetDoubleArrayElements (rinvs, nullptr);
+   if (!elemNodeCountsP || !elemPressureCountsP || !elemPairOffsetsP ||
+       !elemConstraintOffsetsP || !elemRinvOffsetsP || !pairNodeIdxsP ||
+       !blockSlotsP || !constraintsP || !rinvsP) {
+      if (elemNodeCountsP) {
+         env->ReleaseIntArrayElements (
+            elemNodeCounts, elemNodeCountsP, JNI_ABORT);
+      }
+      if (elemPressureCountsP) {
+         env->ReleaseIntArrayElements (
+            elemPressureCounts, elemPressureCountsP, JNI_ABORT);
+      }
+      if (elemPairOffsetsP) {
+         env->ReleaseIntArrayElements (
+            elemPairOffsets, elemPairOffsetsP, JNI_ABORT);
+      }
+      if (elemConstraintOffsetsP) {
+         env->ReleaseIntArrayElements (
+            elemConstraintOffsets, elemConstraintOffsetsP, JNI_ABORT);
+      }
+      if (elemRinvOffsetsP) {
+         env->ReleaseIntArrayElements (
+            elemRinvOffsets, elemRinvOffsetsP, JNI_ABORT);
+      }
+      if (pairNodeIdxsP) {
+         env->ReleaseIntArrayElements (
+            pairNodeIdxs, pairNodeIdxsP, JNI_ABORT);
+      }
+      if (blockSlotsP) {
+         env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+      }
+      if (constraintsP) {
+         env->ReleaseDoubleArrayElements (
+            constraints, constraintsP, JNI_ABORT);
+      }
+      if (rinvsP) {
+         env->ReleaseDoubleArrayElements (rinvs, rinvsP, JNI_ABORT);
+      }
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = b->addDilationalStiffness3ElementDeviceValues (
+      (const int*)elemNodeCountsP, (const int*)elemPressureCountsP,
+      (const int*)elemPairOffsetsP, (const int*)elemConstraintOffsetsP,
+      (const int*)elemRinvOffsetsP, (const int*)pairNodeIdxsP,
+      (const int*)blockSlotsP, (const double*)constraintsP,
+      (const double*)rinvsP, (int)nelems, (double)scale);
+   env->ReleaseIntArrayElements (
+      elemNodeCounts, elemNodeCountsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (
+      elemPressureCounts, elemPressureCountsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (
+      elemPairOffsets, elemPairOffsetsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (
+      elemConstraintOffsets, elemConstraintOffsetsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (
+      elemRinvOffsets, elemRinvOffsetsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (pairNodeIdxs, pairNodeIdxsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (constraints, constraintsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (rinvs, rinvsP, JNI_ABORT);
+   return (jint)status;
+}
+
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactorDeviceValues
   (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
    CuDssBridge* b = asBridge (handle);

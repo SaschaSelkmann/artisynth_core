@@ -370,3 +370,80 @@ extern "C" void addMaterialStiffness3Element_launch (
       elemGradOffsets, pairNodeIdxs, blockSlots, grads, Ds, sigmas, dvs,
       globalScale, crsVals);
 }
+
+__global__ static void addDilationalStiffness3ElementKernel (
+   int nelems,
+   const int*    __restrict__ elemNodeCounts,
+   const int*    __restrict__ elemPressureCounts,
+   const int*    __restrict__ elemPairOffsets,
+   const int*    __restrict__ elemConstraintOffsets,
+   const int*    __restrict__ elemRinvOffsets,
+   const int*    __restrict__ pairNodeIdxs,
+   const int*    __restrict__ blockSlots,
+   const double* __restrict__ constraints,
+   const double* __restrict__ rinvs,
+   double globalScale,
+   double*       __restrict__ crsVals) {
+
+   int e = blockIdx.x;
+   if (e >= nelems) {
+      return;
+   }
+   int np = elemPressureCounts[e];
+   if (np <= 0) {
+      return;
+   }
+   int pair0 = elemPairOffsets[e];
+   int npairs = elemPairOffsets[e + 1] - pair0;
+   int c0 = elemConstraintOffsets[e];
+   int r0 = elemRinvOffsets[e];
+
+   for (int pair = threadIdx.x; pair < npairs; pair += blockDim.x) {
+      int pidx = pair0 + pair;
+      int i = pairNodeIdxs[2*pidx];
+      int j = pairNodeIdxs[2*pidx + 1];
+      int ci0 = c0 + i*np;
+      int cj0 = c0 + j*np;
+
+      double K[9];
+      for (int k=0; k<9; k++) {
+         K[k] = 0.0;
+      }
+      for (int a=0; a<np; a++) {
+         const double* ci = constraints + 3*(ci0 + a);
+         for (int b=0; b<np; b++) {
+            double r = rinvs[r0 + a*np + b];
+            const double* cj = constraints + 3*(cj0 + b);
+            K[0] += ci[0]*r*cj[0];
+            K[1] += ci[0]*r*cj[1];
+            K[2] += ci[0]*r*cj[2];
+            K[3] += ci[1]*r*cj[0];
+            K[4] += ci[1]*r*cj[1];
+            K[5] += ci[1]*r*cj[2];
+            K[6] += ci[2]*r*cj[0];
+            K[7] += ci[2]*r*cj[1];
+            K[8] += ci[2]*r*cj[2];
+         }
+      }
+      const int* slots = blockSlots + 9*pidx;
+      for (int k=0; k<9; k++) {
+         int slot = slots[k];
+         if (slot >= 0) {
+            atomicAdd (&crsVals[slot], globalScale*K[k]);
+         }
+      }
+   }
+}
+
+extern "C" void addDilationalStiffness3Element_launch (
+   int nelems, const int* elemNodeCounts, const int* elemPressureCounts,
+   const int* elemPairOffsets, const int* elemConstraintOffsets,
+   const int* elemRinvOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const double* constraints, const double* rinvs,
+   double globalScale, double* crsVals, cudaStream_t stream) {
+   const int threads = 256;
+   addDilationalStiffness3ElementKernel<<<nelems, threads, 0, stream>>>(
+      nelems, elemNodeCounts, elemPressureCounts, elemPairOffsets,
+      elemConstraintOffsets, elemRinvOffsets, pairNodeIdxs, blockSlots,
+      constraints, rinvs, globalScale, crsVals);
+}
