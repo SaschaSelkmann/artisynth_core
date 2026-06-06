@@ -11,6 +11,7 @@ import artisynth.core.mechmodels.*;
 
 import artisynth.core.probes.*;
 import maspack.matrix.*;
+import maspack.properties.PropertyMode;
 import maspack.render.*;
 
 import java.util.*;
@@ -117,7 +118,9 @@ public class BigBeam3d extends FemBeam3d {
       //super (name, "hex", 1.0, 0.2, 10, 5, 0);
       myFemMod.setSurfaceRendering (FemModel3d.SurfaceRender.None);
 
-      MooneyRivlinMaterial mat = new MooneyRivlinMaterial ();
+      LinearMaterial mat = new LinearMaterial (
+         /*E=*/500000, /*nu=*/0.33, /*corotated=*/false);
+      mat.setCorotatedMode (PropertyMode.Explicit);
       myFemMod.setMaterial (mat);
       myMechMod.setProfiling (true);
       RenderProps.setVisible (myFemMod.getNodes(), false);
@@ -133,4 +136,3 @@ public class BigBeam3d extends FemBeam3d {
       return super.advance (t0, t1, flags);
    }
 }
-

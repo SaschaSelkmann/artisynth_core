@@ -107,6 +107,11 @@ public class CuDssSolver implements DirectSolver {
       int[] elemIpOffsets, int[] elemGradOffsets, int[] pairNodeIdxs,
       int[] blockSlots, double[] grads, double[] Ds, double[] sigmas,
       double[] dvs, int nelems, double scale);
+   private static native int    doAddLinearElasticStiffness3ElementDeviceValues (
+      long handle, int[] elemNodeCounts, int[] elemPairOffsets,
+      int[] elemIpOffsets, int[] elemGradOffsets, int[] pairNodeIdxs,
+      int[] blockSlots, double[] elemParams, double[] grads, double[] dvs,
+      int nelems, double scale);
    private static native int    doAddDilationalStiffness3ElementDeviceValues (
       long handle, int[] elemNodeCounts, int[] elemPressureCounts,
       int[] elemPairOffsets, int[] elemConstraintOffsets,
@@ -566,6 +571,48 @@ public class CuDssSolver implements DirectSolver {
             elemGradOffsets, pairNodeIdxs, blockSlots, grads, Ds, sigmas,
             dvs, nelems, scale),
          "addMaterialStiffness3ElementDeviceValues");
+   }
+
+   /**
+    * Computes and adds compact element-batched isotropic linear elastic
+    * stiffness contributions on the GPU. Per element, {@code elemParams}
+    * stores {@code [E, nu]}; the CUDA kernel forms the 6x6 tangent matrix and
+    * scatters the resulting 3x3 node-pair blocks.
+    */
+   public synchronized void addLinearElasticStiffness3ElementDeviceValues (
+      int[] elemNodeCounts, int[] elemPairOffsets, int[] elemIpOffsets,
+      int[] elemGradOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      double[] elemParams, double[] grads, double[] dvs, int nelems,
+      double scale) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      if (nelems < 0 ||
+          nelems > elemNodeCounts.length ||
+          nelems+1 > elemPairOffsets.length ||
+          nelems+1 > elemIpOffsets.length ||
+          nelems+1 > elemGradOffsets.length) {
+         throw new IllegalArgumentException (
+            "nelems exceeds compact linear elastic element arrays");
+      }
+      int npairs = elemPairOffsets[nelems];
+      int nips = elemIpOffsets[nelems];
+      int ngrads = elemGradOffsets[nelems];
+      if (npairs < 0 || nips < 0 || ngrads < 0 ||
+          npairs > pairNodeIdxs.length/2 ||
+          npairs > blockSlots.length/9 ||
+          nelems > elemParams.length/2 ||
+          nips > dvs.length ||
+          ngrads > grads.length/3) {
+         throw new IllegalArgumentException (
+            "compact linear elastic descriptor arrays are inconsistent");
+      }
+      check (
+         doAddLinearElasticStiffness3ElementDeviceValues (
+            myHandle, elemNodeCounts, elemPairOffsets, elemIpOffsets,
+            elemGradOffsets, pairNodeIdxs, blockSlots, elemParams, grads,
+            dvs, nelems, scale),
+         "addLinearElasticStiffness3ElementDeviceValues");
    }
 
    /**

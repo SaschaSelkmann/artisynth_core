@@ -24,6 +24,7 @@ import artisynth.core.fields.ScalarNodalField;
 import artisynth.core.materials.FemMaterial;
 import artisynth.core.materials.IncompressibleMaterialBase;
 import artisynth.core.materials.IncompressibleMaterialBase.BulkPotential;
+import artisynth.core.materials.LinearMaterial;
 import artisynth.core.materials.MaterialStateObject;
 import artisynth.core.mechmodels.BodyConnector;
 import artisynth.core.mechmodels.Collidable;
@@ -4136,7 +4137,9 @@ PointAttachable, ConnectableBody {
    private boolean materialSupportsGpuMaterialStiffness3 (
       FemMaterial mat) {
 
-      return mat != null && !mat.isLinear() && !mat.hasState();
+      return (mat != null &&
+              !mat.hasState() &&
+              (!mat.isLinear() || !mat.isCorotated()));
    }
 
    private boolean materialsSupportGpuMaterialStiffness3 (
@@ -4215,6 +4218,168 @@ PointAttachable, ConnectableBody {
       return true;
    }
 
+   private boolean isGpuLinearElasticMaterial (FemMaterial mat) {
+      return (mat instanceof LinearMaterial &&
+              !mat.isCorotated() &&
+              !mat.hasState() &&
+              ((LinearMaterial)mat).getYoungsModulusField() == null);
+   }
+
+   private boolean canAssembleLinearElasticStiffness3CrsValueContributions (
+      ArrayList<FemMaterial> amats) {
+
+      boolean profileGpuAssembly =
+         MechSystemSolver.getGpuAssemblyProfilingEnabled();
+      if (myShellElements.size() != 0 || hasIndirectGpuAssemblyContributions()) {
+         return false;
+      }
+      if (amats != null && !amats.isEmpty()) {
+         return false;
+      }
+      for (FemElement3d e : myElements) {
+         FemMaterial mat = getElementMaterial(e);
+         if (!isGpuLinearElasticMaterial (mat) ||
+             (e.getAugmentingMaterials() != null &&
+              !e.getAugmentingMaterials().isEmpty()) ||
+             (e.getAuxiliaryMaterials() != null &&
+              e.getAuxiliaryMaterials().length != 0)) {
+            if (profileGpuAssembly) {
+               System.out.printf (
+                  "[gpu-assembly-profile] fem=%s linearElem3 disabled: "+
+                  "element=%s material=%s linear=%s corotated=%s state=%s "+
+                  "field=%s elemAug=%s elemAux=%s%n",
+                  profileName(), e.getNumber(),
+                  (mat != null ? mat.getClass().getName() : "null"),
+                  (mat != null && mat.isLinear()),
+                  (mat != null && mat.isCorotated()),
+                  (mat != null && mat.hasState()),
+                  (mat instanceof LinearMaterial &&
+                   ((LinearMaterial)mat).getYoungsModulusField() != null),
+                  (e.getAugmentingMaterials() != null &&
+                   !e.getAugmentingMaterials().isEmpty()),
+                  (e.getAuxiliaryMaterials() != null &&
+                   e.getAuxiliaryMaterials().length != 0));
+            }
+            return false;
+         }
+      }
+      return true;
+   }
+
+   private boolean addLinearElasticStiffness3CrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      int nelems = myElements.size();
+      int totalPairs = 0;
+      int totalIps = 0;
+      int totalGradVecs = 0;
+      for (FemElement3d e : myElements) {
+         int npairs = 0;
+         for (int i = 0; i < e.myNodes.length; i++) {
+            int bi = e.myNodes[i].getLocalSolveIndex();
+            if (bi != -1) {
+               for (int j = 0; j < e.myNodes.length; j++) {
+                  int bj = e.myNodes[j].getLocalSolveIndex();
+                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                     npairs++;
+                  }
+               }
+            }
+         }
+         totalPairs += npairs;
+         totalIps += e.getIntegrationPoints().length;
+         totalGradVecs += e.getIntegrationPoints().length * e.myNodes.length;
+      }
+
+      int[] elemNodeCounts = new int[nelems];
+      int[] elemPairOffsets = new int[nelems+1];
+      int[] elemIpOffsets = new int[nelems+1];
+      int[] elemGradOffsets = new int[nelems+1];
+      int[] pairNodeIdxs = new int[2*totalPairs];
+      int[] blockSlots = new int[9*totalPairs];
+      double[] elemParams = new double[2*nelems];
+      double[] grads = new double[3*totalGradVecs];
+      double[] dvs = new double[totalIps];
+
+      FemDeformedPoint dpnt = new FemDeformedPoint();
+      Matrix3d invJ = new Matrix3d();
+      int elemIdx = 0;
+      int pairIdx = 0;
+      int ipIdx = 0;
+      int gradVecIdx = 0;
+      for (FemElement3d e : myElements) {
+         LinearMaterial mat = (LinearMaterial)getElementMaterial(e);
+         elemNodeCounts[elemIdx] = e.myNodes.length;
+         elemPairOffsets[elemIdx] = pairIdx;
+         elemIpOffsets[elemIdx] = ipIdx;
+         elemGradOffsets[elemIdx] = gradVecIdx;
+         elemParams[2*elemIdx] = mat.getYoungsModulus();
+         elemParams[2*elemIdx+1] = mat.getPoissonsRatio();
+
+         for (int i = 0; i < e.myNodes.length; i++) {
+            int bi = e.myNodes[i].getLocalSolveIndex();
+            if (bi != -1) {
+               for (int j = 0; j < e.myNodes.length; j++) {
+                  int bj = e.myNodes[j].getLocalSolveIndex();
+                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                     FemNodeNeighbor nbr = e.myNbrs[i][j];
+                     pairNodeIdxs[2*pairIdx] = i;
+                     pairNodeIdxs[2*pairIdx+1] = j;
+                     int slotBase = 9*pairIdx;
+                     int blkNum = nbr.getBlockNumber();
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 0);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 1);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 2);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 0);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 1);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 2);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 0);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 1);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 2);
+                     pairIdx++;
+                  }
+               }
+            }
+         }
+
+         IntegrationPoint3d[] ipnts = e.getIntegrationPoints();
+         IntegrationData3d[] idata = e.getIntegrationData();
+         for (int k = 0; k < ipnts.length; k++) {
+            IntegrationPoint3d pt = ipnts[k];
+            IntegrationData3d dt = idata[k];
+            dpnt.setFromIntegrationPoint (pt, dt, null, e, k);
+            double detJ = invJ.fastInvert (dpnt.getJ());
+            double dv = detJ * pt.getWeight();
+            Vector3d[] GNx = pt.updateShapeGradient (invJ);
+            int gradBase = 3*gradVecIdx;
+            for (int i=0; i<e.myNodes.length; i++) {
+               grads[gradBase++] = GNx[i].x;
+               grads[gradBase++] = GNx[i].y;
+               grads[gradBase++] = GNx[i].z;
+            }
+            gradVecIdx += e.myNodes.length;
+            dvs[ipIdx++] = s*dv;
+         }
+         elemIdx++;
+      }
+      elemPairOffsets[nelems] = pairIdx;
+      elemIpOffsets[nelems] = ipIdx;
+      elemGradOffsets[nelems] = gradVecIdx;
+      context.addLinearElasticStiffness3ElementCrsValueContributions (
+         elemNodeCounts, elemPairOffsets, elemIpOffsets, elemGradOffsets,
+         pairNodeIdxs, blockSlots, elemParams, grads, dvs, nelems);
+      return true;
+   }
+
    private static void packMaterialStiffness3D (
       double[] dst, int idx, Matrix6d D) {
 
@@ -4251,6 +4416,9 @@ PointAttachable, ConnectableBody {
       }
       IncompMethod softIncomp = getSoftIncompMethod();
       ArrayList<FemMaterial> amats = getAugmentingMaterials();
+      if (canAssembleLinearElasticStiffness3CrsValueContributions (amats)) {
+         return addLinearElasticStiffness3CrsValueContributions (context, s);
+      }
       if (!canAssembleMaterialStiffness3CrsValueContributions (
              softIncomp, amats)) {
          return false;
@@ -4456,6 +4624,9 @@ PointAttachable, ConnectableBody {
             sigma.setZero();
             D.setZero();
             mat.computeStressAndTangent (sigma, D, dpnt, Q, 0.0, null);
+            if (mat.isLinear()) {
+               sigma.setZero();
+            }
             dpnt.setAveragePressure (0);
             dpnt.setAverageDetF (0);
             int ks = 0;

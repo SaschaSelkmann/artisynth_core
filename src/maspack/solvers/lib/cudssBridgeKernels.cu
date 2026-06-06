@@ -371,6 +371,86 @@ extern "C" void addMaterialStiffness3Element_launch (
       globalScale, crsVals);
 }
 
+__device__ static void fillLinearElasticD (
+   double E, double nu, double* D) {
+
+   for (int i=0; i<36; i++) {
+      D[i] = 0.0;
+   }
+   double a = E / (1.0 + nu);
+   double dia = (1.0 - nu) / (1.0 - 2.0*nu) * a;
+   double mu = 0.5 * a;
+   double off = nu / (1.0 - 2.0*nu) * a;
+
+   D[0] = dia; D[1] = off; D[2] = off;
+   D[6] = off; D[7] = dia; D[8] = off;
+   D[12] = off; D[13] = off; D[14] = dia;
+   D[21] = mu;
+   D[28] = mu;
+   D[35] = mu;
+}
+
+__global__ static void addLinearElasticStiffness3ElementKernel (
+   int nelems,
+   const int*    __restrict__ elemNodeCounts,
+   const int*    __restrict__ elemPairOffsets,
+   const int*    __restrict__ elemIpOffsets,
+   const int*    __restrict__ elemGradOffsets,
+   const int*    __restrict__ pairNodeIdxs,
+   const int*    __restrict__ blockSlots,
+   const double* __restrict__ elemParams,
+   const double* __restrict__ grads,
+   const double* __restrict__ dvs,
+   double globalScale,
+   double*       __restrict__ crsVals) {
+
+   int e = blockIdx.x;
+   if (e >= nelems) {
+      return;
+   }
+   int nnodes = elemNodeCounts[e];
+   int pair0 = elemPairOffsets[e];
+   int npairs = elemPairOffsets[e + 1] - pair0;
+   int ip0 = elemIpOffsets[e];
+   int nips = elemIpOffsets[e + 1] - ip0;
+   int grad0 = elemGradOffsets[e];
+   int total = nips * npairs;
+
+   double D[36];
+   double sig[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+   double E = elemParams[2*e];
+   double nu = elemParams[2*e + 1];
+   fillLinearElasticD (E, nu, D);
+
+   for (int idx = threadIdx.x; idx < total; idx += blockDim.x) {
+      int ip = idx / npairs;
+      int pair = idx - ip * npairs;
+      int pidx = pair0 + pair;
+      int i = pairNodeIdxs[2*pidx];
+      int j = pairNodeIdxs[2*pidx + 1];
+      int ipidx = ip0 + ip;
+      int gbase = grad0 + ip * nnodes;
+      const double* gi = grads + 3*(gbase + i);
+      const double* gj = grads + 3*(gbase + j);
+      addMaterialStiffness3Block (
+         blockSlots + 9*pidx, gi, D, sig, gj, dvs[ipidx],
+         globalScale, crsVals);
+   }
+}
+
+extern "C" void addLinearElasticStiffness3Element_launch (
+   int nelems, const int* elemNodeCounts, const int* elemPairOffsets,
+   const int* elemIpOffsets, const int* elemGradOffsets,
+   const int* pairNodeIdxs, const int* blockSlots,
+   const double* elemParams, const double* grads, const double* dvs,
+   double globalScale, double* crsVals, cudaStream_t stream) {
+   const int threads = 256;
+   addLinearElasticStiffness3ElementKernel<<<nelems, threads, 0, stream>>>(
+      nelems, elemNodeCounts, elemPairOffsets, elemIpOffsets,
+      elemGradOffsets, pairNodeIdxs, blockSlots, elemParams, grads, dvs,
+      globalScale, crsVals);
+}
+
 __global__ static void addDilationalStiffness3ElementKernel (
    int nelems,
    const int*    __restrict__ elemNodeCounts,

@@ -623,6 +623,7 @@ public class KKTSolver {
          null, null, 0, null, null, null, 0,
          null, null, null, null, null, null, 0,
          null, null, null, null, null, null, null, null, null, null, 0,
+         null, null, null, null, null, null, null, null, null, 0,
          null, null, null, null, null, null, null, null, null, 0);
    }
 
@@ -641,6 +642,11 @@ public class KKTSolver {
       double[] matElem3Grads, double[] matElem3Ds,
       double[] matElem3Sigmas, double[] matElem3Dvs,
       int numMatElem3Vals,
+      int[] linElem3NodeCounts, int[] linElem3PairOffsets,
+      int[] linElem3IpOffsets, int[] linElem3GradOffsets,
+      int[] linElem3PairNodeIdxs, int[] linElem3BlockSlots,
+      double[] linElem3Params, double[] linElem3Grads,
+      double[] linElem3Dvs, int numLinElem3Vals,
       int[] dilElem3NodeCounts, int[] dilElem3PressureCounts,
       int[] dilElem3PairOffsets, int[] dilElem3ConstraintOffsets,
       int[] dilElem3RinvOffsets, int[] dilElem3PairNodeIdxs,
@@ -662,6 +668,9 @@ public class KKTSolver {
          matElem3GradOffsets, matElem3PairNodeIdxs, matElem3BlockSlots,
          matElem3Grads, matElem3Ds, matElem3Sigmas, matElem3Dvs,
          numMatElem3Vals,
+         linElem3NodeCounts, linElem3PairOffsets, linElem3IpOffsets,
+         linElem3GradOffsets, linElem3PairNodeIdxs, linElem3BlockSlots,
+         linElem3Params, linElem3Grads, linElem3Dvs, numLinElem3Vals,
          dilElem3NodeCounts, dilElem3PressureCounts, dilElem3PairOffsets,
          dilElem3ConstraintOffsets, dilElem3RinvOffsets,
          dilElem3PairNodeIdxs, dilElem3BlockSlots, dilElem3Constraints,
@@ -1969,6 +1978,11 @@ public class KKTSolver {
       double[] matElem3Grads, double[] matElem3Ds,
       double[] matElem3Sigmas, double[] matElem3Dvs,
       int numMatElem3Vals,
+      int[] linElem3NodeCounts, int[] linElem3PairOffsets,
+      int[] linElem3IpOffsets, int[] linElem3GradOffsets,
+      int[] linElem3PairNodeIdxs, int[] linElem3BlockSlots,
+      double[] linElem3Params, double[] linElem3Grads,
+      double[] linElem3Dvs, int numLinElem3Vals,
       int[] dilElem3NodeCounts, int[] dilElem3PressureCounts,
       int[] dilElem3PairOffsets, int[] dilElem3ConstraintOffsets,
       int[] dilElem3RinvOffsets, int[] dilElem3PairNodeIdxs,
@@ -2003,6 +2017,13 @@ public class KKTSolver {
             matElem3GradOffsets, matElem3PairNodeIdxs, matElem3BlockSlots,
             matElem3Grads, matElem3Ds, matElem3Sigmas, matElem3Dvs,
             numMatElem3Vals, 1.0);
+      }
+      if (numLinElem3Vals > 0) {
+         myCuDss.addLinearElasticStiffness3ElementDeviceValues (
+            linElem3NodeCounts, linElem3PairOffsets, linElem3IpOffsets,
+            linElem3GradOffsets, linElem3PairNodeIdxs, linElem3BlockSlots,
+            linElem3Params, linElem3Grads, linElem3Dvs,
+            numLinElem3Vals, 1.0);
       }
       if (numDilElem3Vals > 0) {
          myCuDss.addDilationalStiffness3ElementDeviceValues (
