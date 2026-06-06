@@ -450,6 +450,21 @@ int CuDssBridge::factor (const double* vals) {
    return CUDSS_BRIDGE_OK;
 }
 
+int CuDssBridge::getDeviceValues (double* vals) {
+   if (!myHasPattern || !myValsD) {
+      myLastErr = "getDeviceValues called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (!cudaOk (cudaMemcpyAsync (vals, myValsD, myNnz*sizeof(double),
+                                 cudaMemcpyDeviceToHost, myStream))) {
+      myLastErr = "cudaMemcpyAsync failed copying device values to host";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   cudaStreamSynchronize (myStream);
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
 int CuDssBridge::clearDeviceValues() {
    if (!myHasPattern || !myValsD) {
       myLastErr = "clearDeviceValues called before setPattern";

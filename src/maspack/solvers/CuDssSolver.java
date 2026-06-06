@@ -90,6 +90,7 @@ public class CuDssSolver implements DirectSolver {
    private static native int    doAnalyze (long handle);
    private static native int    doFactor  (long handle, double[] vals);
    private static native int    doClearDeviceValues (long handle);
+   private static native int    doGetDeviceValues (long handle, double[] vals);
    private static native int    doAddDeviceValues (
       long handle, int[] slots, double[] vals, int nvals, double scale);
    private static native int    doAddScaledDiagonal3DeviceValues (
@@ -420,6 +421,18 @@ public class CuDssSolver implements DirectSolver {
          throw new ImproperStateException ("analyze() not previously called");
       }
       check (doClearDeviceValues (myHandle), "clearDeviceValues");
+   }
+
+   /**
+    * Copies the current device-side CRS value buffer back into {@code vals}
+    * (length must equal the nnz of the analyzed pattern). Debug / verification
+    * aid for comparing GPU-assembled CRS values against a CPU reference.
+    */
+   public synchronized void getDeviceValues (double[] vals) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      check (doGetDeviceValues (myHandle, vals), "getDeviceValues");
    }
 
    /**

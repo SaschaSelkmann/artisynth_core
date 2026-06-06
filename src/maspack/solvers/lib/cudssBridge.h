@@ -124,6 +124,11 @@ public:
       int nelems, double scale);
    int factorDeviceValues();
 
+   // Copy the current device-side CSR values buffer back to host (length nnz).
+   // Debug / verification aid: lets callers compare GPU-assembled CSR values
+   // against a CPU reference assembly. Returns OK or an error code.
+   int getDeviceValues (double* vals);
+
    // Copy b[] H->D, run CUDSS_PHASE_SOLVE, copy x[] D->H. Both arrays length n.
    int solve (const double* b, double* x);
 

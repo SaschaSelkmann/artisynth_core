@@ -67,6 +67,14 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doClearDeviceValues
 
 /*
  * Class:     maspack_solvers_CuDssSolver
+ * Method:    doGetDeviceValues
+ * Signature: (J[D)I
+ */
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doGetDeviceValues
+  (JNIEnv *, jclass, jlong, jdoubleArray);
+
+/*
+ * Class:     maspack_solvers_CuDssSolver
  * Method:    doAddDeviceValues
  * Signature: (J[I[DID)I
  */

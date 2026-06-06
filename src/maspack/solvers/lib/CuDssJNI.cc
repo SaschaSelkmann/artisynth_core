@@ -70,6 +70,19 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doClearDeviceValues
    return (jint)b->clearDeviceValues();
 }
 
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doGetDeviceValues
+  (JNIEnv* env, jclass /*cls*/, jlong handle, jdoubleArray vals) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   jdouble* valsP = env->GetDoubleArrayElements (vals, nullptr);
+   if (!valsP) return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   int status = b->getDeviceValues ((double*)valsP);
+   // commit the copied-back values to the Java array only on success
+   env->ReleaseDoubleArrayElements (
+      vals, valsP, status == CUDSS_BRIDGE_OK ? 0 : JNI_ABORT);
+   return (jint)status;
+}
+
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddDeviceValues
   (JNIEnv* env, jclass /*cls*/, jlong handle,
    jintArray slots, jdoubleArray vals, jint nvals, jdouble scale) {
