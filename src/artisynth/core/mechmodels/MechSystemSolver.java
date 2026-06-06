@@ -1263,8 +1263,7 @@ public class MechSystemSolver {
       if (!myGpuAssemblyStatusEnabled || !enableGpuAssemblyDirectCrs()) {
          return;
       }
-      String source = context.hasCpuGeneratedMatrixContributions() ?
-         "cpuGeneratedValuesToDeviceCrs" : "deviceGeneratedValues";
+      String source = context.getContributionSourceSummary();
       String status = String.format (
          "[gpu-assembly-status] solver=%s phase=%s integrator=%s "+
          "matrixSolver=%s directCrs=%b deviceCrs=%b "+
@@ -1286,9 +1285,10 @@ public class MechSystemSolver {
           context.hasCpuGeneratedMatrixContributions()) {
          throw new UnsupportedOperationException (
             "Full GPU assembly requested for "+phase+
-            ", but FEM matrix contributions are still generated on the CPU "+
-            "before being applied to cuDSS device CRS values ("+
-            context.getContributionSummary()+"). A material/element CUDA "+
+            ", but some FEM matrix contributions still originate from host "+
+            "evaluation before being applied to cuDSS device CRS values "+
+            "(source="+context.getContributionSourceSummary()+", "+
+            context.getContributionSummary()+"). A CUDA material/evaluation "+
             "kernel is still required for this model.");
       }
    }

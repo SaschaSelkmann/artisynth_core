@@ -876,6 +876,36 @@ public interface MechSystem {
                  myNumDilationalStiffness3ElemContributions > 0);
       }
 
+      public boolean hasHostAssembledCrsValueContributions() {
+         return myNumCrsValueContributions > 0;
+      }
+
+      public boolean hasHostAssembledBlock3Contributions() {
+         return myNumScaledBlock3Contributions > 0;
+      }
+
+      public boolean hasHostEvaluatedMaterialDescriptors() {
+         return (myNumMaterialStiffness3Contributions > 0 ||
+                 myNumMaterialStiffness3ElemContributions > 0 ||
+                 myNumDilationalStiffness3ElemContributions > 0);
+      }
+
+      public String getContributionSourceSummary() {
+         if (hasHostAssembledCrsValueContributions() ||
+             hasHostAssembledBlock3Contributions()) {
+            return "hostMatrixValuesToDeviceCrs";
+         }
+         else if (hasHostEvaluatedMaterialDescriptors()) {
+            return "hostMaterialDescriptorsToGpuKernels";
+         }
+         else if (myNumScaledDiagonal3Contributions > 0) {
+            return "hostScalarDescriptorsToGpuKernels";
+         }
+         else {
+            return "deviceGeneratedValues";
+         }
+      }
+
       public String getContributionSummary() {
          return String.format (
             "generic=%d diag3=%d block3=%d material3=%d "+
