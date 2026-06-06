@@ -4124,6 +4124,264 @@ PointAttachable, ConnectableBody {
          context.getCrsValues(), context.getSlotMap(), s);
    }
 
+   private boolean hasIndirectGpuAssemblyContributions() {
+      for (int i = 0; i < myNodes.size(); i++) {
+         if (getIndirectNeighbors(myNodes.get(i)).size() != 0) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   private boolean materialSupportsGpuMaterialStiffness3 (
+      FemMaterial mat) {
+
+      return mat != null && !mat.isLinear() && !mat.hasState();
+   }
+
+   private boolean materialsSupportGpuMaterialStiffness3 (
+      ArrayList<FemMaterial> mats) {
+
+      if (mats != null) {
+         for (FemMaterial mat : mats) {
+            if (mat.hasState()) {
+               return false;
+            }
+         }
+      }
+      return true;
+   }
+
+   private boolean materialsSupportGpuMaterialStiffness3 (
+      AuxiliaryMaterial[] mats) {
+
+      if (mats != null) {
+         for (AuxiliaryMaterial mat : mats) {
+            if (mat.hasState()) {
+               return false;
+            }
+         }
+      }
+      return true;
+   }
+
+   private boolean canAssembleMaterialStiffness3CrsValueContributions (
+      IncompMethod softIncomp, ArrayList<FemMaterial> amats) {
+
+      int maxMaterial3Contributions = Integer.getInteger (
+         "artisynth.gpuAssembly.maxMaterialStiffness3Contributions",
+         2000000);
+      long numMaterial3Contributions = 0;
+      boolean profileGpuAssembly =
+         MechSystemSolver.getGpuAssemblyProfilingEnabled();
+      if (myShellElements.size() != 0) {
+         if (profileGpuAssembly) {
+            System.out.printf (
+               "[gpu-assembly-profile] fem=%s material3 disabled: shells=%d%n",
+               profileName(), myShellElements.size());
+         }
+         return false;
+      }
+      if (hasIndirectGpuAssemblyContributions()) {
+         if (profileGpuAssembly) {
+            System.out.printf (
+               "[gpu-assembly-profile] fem=%s material3 disabled: indirect neighbors%n",
+               profileName());
+         }
+         return false;
+      }
+      for (FemElement3d e : myElements) {
+         FemMaterial mat = getElementMaterial(e);
+         if (!materialSupportsGpuMaterialStiffness3 (mat) ||
+             (mat.isIncompressible() &&
+              softIncomp != IncompMethod.OFF &&
+              softIncomp != IncompMethod.ELEMENT) ||
+             !materialsSupportGpuMaterialStiffness3 (amats) ||
+             !materialsSupportGpuMaterialStiffness3 (
+                e.getAugmentingMaterials()) ||
+             !materialsSupportGpuMaterialStiffness3 (
+                e.getAuxiliaryMaterials())) {
+            if (profileGpuAssembly) {
+               System.out.printf (
+                  "[gpu-assembly-profile] fem=%s material3 disabled: "+
+                  "element=%s material=%s linear=%s state=%s incomp=%s "+
+                  "softIncomp=%s%n",
+                  profileName(), e.getNumber(),
+                  (mat != null ? mat.getClass().getName() : "null"),
+                  (mat != null && mat.isLinear()),
+                  (mat != null && mat.hasState()),
+                  (mat != null && mat.isIncompressible()),
+                  softIncomp);
+            }
+            return false;
+         }
+         int numPairs = 0;
+         for (int i = 0; i < e.myNodes.length; i++) {
+            int bi = e.myNodes[i].getLocalSolveIndex();
+            if (bi != -1) {
+               for (int j = 0; j < e.myNodes.length; j++) {
+                  int bj = e.myNodes[j].getLocalSolveIndex();
+                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                     numPairs++;
+                  }
+               }
+            }
+         }
+         numMaterial3Contributions +=
+            (long)e.getIntegrationPoints().length*numPairs;
+         if (numMaterial3Contributions > maxMaterial3Contributions) {
+            if (profileGpuAssembly) {
+               System.out.printf (
+                  "[gpu-assembly-profile] fem=%s material3 disabled: "+
+                  "estimatedContributions=%d max=%d%n",
+                  profileName(), numMaterial3Contributions,
+                  maxMaterial3Contributions);
+            }
+            return false;
+         }
+      }
+      return true;
+   }
+
+   private boolean addMaterialStiffness3CrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+
+      if (s == 0) {
+         return true;
+      }
+      IncompMethod softIncomp = getSoftIncompMethod();
+      ArrayList<FemMaterial> amats = getAugmentingMaterials();
+      if (!canAssembleMaterialStiffness3CrsValueContributions (
+             softIncomp, amats)) {
+         return false;
+      }
+
+      FemDeformedPoint dpnt = new FemDeformedPoint();
+      SymmetricMatrix3d sigma = new SymmetricMatrix3d();
+      Matrix6d D = new Matrix6d();
+      Matrix3d invJ = new Matrix3d();
+
+      for (FemElement3d e : myElements) {
+         FemMaterial mat = getElementMaterial(e);
+         IncompMethod elemSoftIncomp =
+            mat.isIncompressible() ? softIncomp : IncompMethod.OFF;
+         IntegrationPoint3d[] ipnts = e.getIntegrationPoints();
+         IntegrationData3d[] idata = e.getIntegrationData();
+         IncompressibleMaterialBase imat = mat.getIncompressibleComponent();
+         MatrixBlock[] constraints = null;
+         double[] pbuf = myPressures.getBuffer();
+         double[] jbuf = myAvgDetFs.getBuffer();
+
+         if (elemSoftIncomp == IncompMethod.ELEMENT) {
+            computePressuresAndRinv (e, imat, dpnt);
+            constraints = e.getIncompressConstraints();
+            for (int i = 0; i < e.myNodes.length; i++) {
+               constraints[i].setZero();
+            }
+         }
+
+         for (int k = 0; k < ipnts.length; k++) {
+            IntegrationPoint3d pt = ipnts[k];
+            IntegrationData3d dt = idata[k];
+
+            dpnt.setFromIntegrationPoint (pt, dt, null, e, k);
+            double detJ = invJ.fastInvert (dpnt.getJ());
+            double dv = detJ * pt.getWeight();
+            Vector3d[] GNx = pt.updateShapeGradient (invJ);
+            double pressure = 0;
+            double avgDetF = 0;
+            double[] H = null;
+            if (elemSoftIncomp == IncompMethod.ELEMENT) {
+               H = pt.getPressureWeights().getBuffer();
+               int npvals = e.numPressureVals();
+               for (int l = 0; l < npvals; l++) {
+                  pressure += H[l] * pbuf[l];
+                  avgDetF += H[l] * jbuf[l];
+               }
+            }
+            Matrix3d Q = (dt.myFrame != null ? dt.myFrame : Matrix3d.IDENTITY);
+
+            dpnt.setAveragePressure (pressure);
+            dpnt.setAverageDetF (avgDetF);
+
+            sigma.setZero();
+            D.setZero();
+            mat.computeStressAndTangent (sigma, D, dpnt, Q, 0.0, null);
+            dpnt.setAveragePressure (0);
+            dpnt.setAverageDetF (0);
+            int ks = 0;
+            if (amats != null) {
+               ks = addStressAndTangent (
+                  sigma, D, null, amats, dpnt, dt, ks);
+            }
+            ArrayList<FemMaterial> augmats = e.getAugmentingMaterials();
+            if (augmats != null) {
+               ks = addStressAndTangent (
+                  sigma, D, null, augmats, dpnt, dt, ks);
+            }
+            AuxiliaryMaterial[] auxmats = e.getAuxiliaryMaterials();
+            if (auxmats != null) {
+               ks = addAuxStressAndTangent (
+                  sigma, D, null, auxmats, dpnt, pt, dt, ks);
+            }
+
+            for (int i = 0; i < e.myNodes.length; i++) {
+               FemNode3d nodei = e.myNodes[i];
+               int bi = nodei.getLocalSolveIndex();
+               if (elemSoftIncomp == IncompMethod.ELEMENT) {
+                  FemUtilities.addToIncompressConstraints (
+                     constraints[i], H, GNx[i], dv);
+               }
+               if (bi != -1) {
+                  for (int j = 0; j < e.myNodes.length; j++) {
+                     int bj = e.myNodes[j].getLocalSolveIndex();
+                     if (!mySolveMatrixSymmetricP || bj >= bi) {
+                        FemNodeNeighbor nbr = e.myNbrs[i][j];
+                        context.addMaterialStiffness3CrsValueContribution (
+                           nbr.getBlockNumber(), GNx[i], D, sigma, GNx[j],
+                           dv, s);
+                     }
+                  }
+               }
+            }
+         }
+
+         if (elemSoftIncomp == IncompMethod.ELEMENT) {
+            Matrix3d K = new Matrix3d();
+            for (int i = 0; i < e.myNodes.length; i++) {
+               int bi = e.myNodes[i].getLocalSolveIndex();
+               if (bi != -1) {
+                  for (int j = 0; j < e.myNodes.length; j++) {
+                     int bj = e.myNodes[j].getLocalSolveIndex();
+                     if (!mySolveMatrixSymmetricP || bj >= bi) {
+                        K.setZero();
+                        FemUtilities.addDilationalStiffness (
+                           K, myRinv, constraints[i], constraints[j]);
+                        context.addScaledBlock3CrsValueContribution (
+                           e.myNbrs[i][j].getBlockNumber(), s, K);
+                     }
+                  }
+               }
+            }
+         }
+      }
+      return true;
+   }
+
+   private void addVelJacobianMassDampingCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double sm) {
+
+      for (int i = 0; i < myNodes.size(); i++) {
+         FemNode3d node = myNodes.get(i);
+         if (node.getLocalSolveIndex() != -1) {
+            for (FemNodeNeighbor nbr : getNodeNeighbors(node)) {
+               nbr.addVelJacobianMassDampingCrsContributions (
+                  context, node, sm, myUseConsistentMass);
+            }
+         }
+      }
+   }
+
    public void addVelJacobianCrsValueContributions (
       MechSystem.GpuAssemblyContext context, double s) {
 
@@ -4132,6 +4390,10 @@ PointAttachable, ConnectableBody {
       }
       double sm = -s*myMassDamping;
       double sk = -s*myStiffnessDamping;
+      if (addMaterialStiffness3CrsValueContributions (context, sk)) {
+         addVelJacobianMassDampingCrsValueContributions (context, sm);
+         return;
+      }
       for (int i = 0; i < myNodes.size(); i++) {
          FemNode3d node = myNodes.get(i);
          if (node.getLocalSolveIndex() != -1) {
@@ -4225,6 +4487,9 @@ PointAttachable, ConnectableBody {
 
       if (!myStressesValidP || !myStiffnessesValidP) {
          updateStressAndStiffness();
+      }
+      if (addMaterialStiffness3CrsValueContributions (context, -s)) {
+         return;
       }
       for (int i = 0; i < myNodes.size(); i++) {
          FemNode3d node = myNodes.get(i);

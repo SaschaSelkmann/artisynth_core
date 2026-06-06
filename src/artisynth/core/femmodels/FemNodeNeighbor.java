@@ -346,6 +346,26 @@ public class FemNodeNeighbor {
       }
    }
 
+   public void addVelJacobianMassDampingCrsContributions (
+      MechSystem.GpuAssemblyContext context, FemNode3d node,
+      double sm, boolean useConsistentMass) {
+
+      if (myBlkNum != -1) {
+         if (useConsistentMass && myNode.isActiveLocal()) {
+            addMassDampingToCrsContributions (
+               context, myBlkNum, sm*myMass00);
+         }
+         else if (node == myNode && myNode.isActiveLocal()) {
+            addMassDampingToCrsContributions (
+               context, myBlkNum, sm*myNode.getMass());
+         }
+      }
+      if (myBlkNum11 != -1 && node == myNode && node.isActiveLocal()) {
+         addMassDampingToCrsContributions (
+            context, myBlkNum11, sm*myNode.getBackNode().getMass());
+      }
+   }
+
    public void addPosJacobian (
       SparseNumberedBlockMatrix S, FemNode3d node, double s) {
     

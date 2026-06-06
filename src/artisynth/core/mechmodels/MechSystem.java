@@ -199,13 +199,22 @@ public interface MechSystem {
          int blkNum, Vector3d gi, Matrix6d D, SymmetricMatrix3d sig,
          Vector3d gj, double dv) {
 
+         addMaterialStiffness3CrsValueContribution (
+            blkNum, gi, D, sig, gj, dv, 1.0);
+      }
+
+      public void addMaterialStiffness3CrsValueContribution (
+         int blkNum, Vector3d gi, Matrix6d D, SymmetricMatrix3d sig,
+         Vector3d gj, double dv, double scale) {
+
          if (blkNum == -1 || gi == null || D == null || sig == null ||
-             gj == null || dv == 0) {
+             gj == null || dv == 0 || scale == 0) {
             return;
          }
          if (!mySlotMap.hasBlockSlots (blkNum)) {
             return;
          }
+         double scaledDv = scale*dv;
          ensureMaterialStiffness3ContributionCapacity (
             myNumMaterialStiffness3Contributions+1);
          int slotIdx = 9*myNumMaterialStiffness3Contributions;
@@ -282,10 +291,11 @@ public interface MechSystem {
          myMaterialStiffness3Sigmas[sigIdx+4] = sig.m12;
          myMaterialStiffness3Sigmas[sigIdx+5] = sig.m02;
          myMaterialStiffness3Dvs[
-            myNumMaterialStiffness3Contributions] = dv;
+            myNumMaterialStiffness3Contributions] = scaledDv;
 
          addMaterialStiffness3ToCrsValues (
-            9*myNumMaterialStiffness3Contributions, gi, D, sig, gj, dv);
+            9*myNumMaterialStiffness3Contributions, gi, D, sig, gj,
+            scaledDv);
          myNumMaterialStiffness3Contributions++;
       }
 
