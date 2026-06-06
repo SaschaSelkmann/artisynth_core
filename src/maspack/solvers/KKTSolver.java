@@ -621,7 +621,8 @@ public class KKTSolver {
       return factorDeviceMContributions (
          M, sizeM, GT, Rg, NT, Rn, mSlots, mVals, numMVals,
          null, null, 0, null, null, null, 0,
-         null, null, null, null, null, null, 0);
+         null, null, null, null, null, null, 0,
+         null, null, null, null, null, null, null, null, null, null, 0);
    }
 
    public boolean factorDeviceMContributions (
@@ -632,7 +633,13 @@ public class KKTSolver {
       int[] block3Slots, double[] block3Vals, double[] block3Scales,
       int numBlock3Vals,
       int[] mat3Slots, double[] mat3Gis, double[] mat3Gjs, double[] mat3Ds,
-      double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals) {
+      double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals,
+      int[] matElem3NodeCounts, int[] matElem3PairOffsets,
+      int[] matElem3IpOffsets, int[] matElem3GradOffsets,
+      int[] matElem3PairNodeIdxs, int[] matElem3BlockSlots,
+      double[] matElem3Grads, double[] matElem3Ds,
+      double[] matElem3Sigmas, double[] matElem3Dvs,
+      int numMatElem3Vals) {
 
       if (!canFactorDeviceMContributions()) {
          return false;
@@ -644,7 +651,11 @@ public class KKTSolver {
          diag3Slots, diag3Vals, numDiag3Vals,
          block3Slots, block3Vals, block3Scales, numBlock3Vals,
          mat3Slots, mat3Gis, mat3Gjs, mat3Ds, mat3Sigmas, mat3Dvs,
-         numMat3Vals);
+         numMat3Vals,
+         matElem3NodeCounts, matElem3PairOffsets, matElem3IpOffsets,
+         matElem3GradOffsets, matElem3PairNodeIdxs, matElem3BlockSlots,
+         matElem3Grads, matElem3Ds, matElem3Sigmas, matElem3Dvs,
+         numMatElem3Vals);
 
       if (NT != null && NT.colSize() != 0) {
          if ((myTypeM & Matrix.SYMMETRIC) == 0) {
@@ -1941,7 +1952,13 @@ public class KKTSolver {
       int[] block3Slots, double[] block3Vals, double[] block3Scales,
       int numBlock3Vals,
       int[] mat3Slots, double[] mat3Gis, double[] mat3Gjs, double[] mat3Ds,
-      double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals) {
+      double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals,
+      int[] matElem3NodeCounts, int[] matElem3PairOffsets,
+      int[] matElem3IpOffsets, int[] matElem3GradOffsets,
+      int[] matElem3PairNodeIdxs, int[] matElem3BlockSlots,
+      double[] matElem3Grads, double[] matElem3Ds,
+      double[] matElem3Sigmas, double[] matElem3Dvs,
+      int numMatElem3Vals) {
 
       if (myCuDss == null) {
          throw new ImproperStateException (
@@ -1964,6 +1981,13 @@ public class KKTSolver {
          myCuDss.addMaterialStiffness3DeviceValues (
             mat3Slots, mat3Gis, mat3Gjs, mat3Ds, mat3Sigmas, mat3Dvs,
             numMat3Vals, 1.0);
+      }
+      if (numMatElem3Vals > 0) {
+         myCuDss.addMaterialStiffness3ElementDeviceValues (
+            matElem3NodeCounts, matElem3PairOffsets, matElem3IpOffsets,
+            matElem3GradOffsets, matElem3PairNodeIdxs, matElem3BlockSlots,
+            matElem3Grads, matElem3Ds, matElem3Sigmas, matElem3Dvs,
+            numMatElem3Vals, 1.0);
       }
       myCuDss.factorDeviceValues();
       myLastFactorUsedDeviceValues = true;

@@ -1914,6 +1914,19 @@ public class MechSystemSolver {
                      directCrsContext.getMaterialStiffness3Dvs(),
                      directCrsContext.numMaterialStiffness3Contributions(),
                      1.0);
+                  cudss.addMaterialStiffness3ElementDeviceValues (
+                     directCrsContext.getMaterialStiffness3ElementNodeCounts(),
+                     directCrsContext.getMaterialStiffness3ElementPairOffsets(),
+                     directCrsContext.getMaterialStiffness3ElementIpOffsets(),
+                     directCrsContext.getMaterialStiffness3ElementGradOffsets(),
+                     directCrsContext.getMaterialStiffness3ElementPairNodeIdxs(),
+                     directCrsContext.getMaterialStiffness3ElementBlockSlots(),
+                     directCrsContext.getMaterialStiffness3ElementGrads(),
+                     directCrsContext.getMaterialStiffness3ElementDs(),
+                     directCrsContext.getMaterialStiffness3ElementSigmas(),
+                     directCrsContext.getMaterialStiffness3ElementDvs(),
+                     directCrsContext.numMaterialStiffness3ElementContributions(),
+                     1.0);
                   cudss.factorDeviceValues();
                }
                else {
@@ -2669,7 +2682,18 @@ public class MechSystemSolver {
                       kktMDeviceContext.getMaterialStiffness3Ds(),
                       kktMDeviceContext.getMaterialStiffness3Sigmas(),
                       kktMDeviceContext.getMaterialStiffness3Dvs(),
-                      kktMDeviceContext.numMaterialStiffness3Contributions())) {
+                      kktMDeviceContext.numMaterialStiffness3Contributions(),
+                      kktMDeviceContext.getMaterialStiffness3ElementNodeCounts(),
+                      kktMDeviceContext.getMaterialStiffness3ElementPairOffsets(),
+                      kktMDeviceContext.getMaterialStiffness3ElementIpOffsets(),
+                      kktMDeviceContext.getMaterialStiffness3ElementGradOffsets(),
+                      kktMDeviceContext.getMaterialStiffness3ElementPairNodeIdxs(),
+                      kktMDeviceContext.getMaterialStiffness3ElementBlockSlots(),
+                      kktMDeviceContext.getMaterialStiffness3ElementGrads(),
+                      kktMDeviceContext.getMaterialStiffness3ElementDs(),
+                      kktMDeviceContext.getMaterialStiffness3ElementSigmas(),
+                      kktMDeviceContext.getMaterialStiffness3ElementDvs(),
+                      kktMDeviceContext.numMaterialStiffness3ElementContributions())) {
                   myKKTSolver.solve (vel, myLam, bf, myBg);
                }
                else {
@@ -2716,7 +2740,18 @@ public class MechSystemSolver {
                       kktMDeviceContext.getMaterialStiffness3Ds(),
                       kktMDeviceContext.getMaterialStiffness3Sigmas(),
                       kktMDeviceContext.getMaterialStiffness3Dvs(),
-                      kktMDeviceContext.numMaterialStiffness3Contributions())) {
+                      kktMDeviceContext.numMaterialStiffness3Contributions(),
+                      kktMDeviceContext.getMaterialStiffness3ElementNodeCounts(),
+                      kktMDeviceContext.getMaterialStiffness3ElementPairOffsets(),
+                      kktMDeviceContext.getMaterialStiffness3ElementIpOffsets(),
+                      kktMDeviceContext.getMaterialStiffness3ElementGradOffsets(),
+                      kktMDeviceContext.getMaterialStiffness3ElementPairNodeIdxs(),
+                      kktMDeviceContext.getMaterialStiffness3ElementBlockSlots(),
+                      kktMDeviceContext.getMaterialStiffness3ElementGrads(),
+                      kktMDeviceContext.getMaterialStiffness3ElementDs(),
+                      kktMDeviceContext.getMaterialStiffness3ElementSigmas(),
+                      kktMDeviceContext.getMaterialStiffness3ElementDvs(),
+                      kktMDeviceContext.numMaterialStiffness3ElementContributions())) {
                   myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
                }
                maybeReportGpuAssemblyStatus (

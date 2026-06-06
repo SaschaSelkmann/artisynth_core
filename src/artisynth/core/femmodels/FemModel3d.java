@@ -4168,10 +4168,6 @@ PointAttachable, ConnectableBody {
    private boolean canAssembleMaterialStiffness3CrsValueContributions (
       IncompMethod softIncomp, ArrayList<FemMaterial> amats) {
 
-      int maxMaterial3Contributions = Integer.getInteger (
-         "artisynth.gpuAssembly.maxMaterialStiffness3Contributions",
-         2000000);
-      long numMaterial3Contributions = 0;
       boolean profileGpuAssembly =
          MechSystemSolver.getGpuAssemblyProfilingEnabled();
       if (myShellElements.size() != 0) {
@@ -4215,32 +4211,36 @@ PointAttachable, ConnectableBody {
             }
             return false;
          }
-         int numPairs = 0;
-         for (int i = 0; i < e.myNodes.length; i++) {
-            int bi = e.myNodes[i].getLocalSolveIndex();
-            if (bi != -1) {
-               for (int j = 0; j < e.myNodes.length; j++) {
-                  int bj = e.myNodes[j].getLocalSolveIndex();
-                  if (!mySolveMatrixSymmetricP || bj >= bi) {
-                     numPairs++;
-                  }
-               }
-            }
-         }
-         numMaterial3Contributions +=
-            (long)e.getIntegrationPoints().length*numPairs;
-         if (numMaterial3Contributions > maxMaterial3Contributions) {
-            if (profileGpuAssembly) {
-               System.out.printf (
-                  "[gpu-assembly-profile] fem=%s material3 disabled: "+
-                  "estimatedContributions=%d max=%d%n",
-                  profileName(), numMaterial3Contributions,
-                  maxMaterial3Contributions);
-            }
-            return false;
-         }
       }
       return true;
+   }
+
+   private static void packMaterialStiffness3D (
+      double[] dst, int idx, Matrix6d D) {
+
+      dst[idx++] = D.m00; dst[idx++] = D.m01; dst[idx++] = D.m02;
+      dst[idx++] = D.m03; dst[idx++] = D.m04; dst[idx++] = D.m05;
+      dst[idx++] = D.m10; dst[idx++] = D.m11; dst[idx++] = D.m12;
+      dst[idx++] = D.m13; dst[idx++] = D.m14; dst[idx++] = D.m15;
+      dst[idx++] = D.m20; dst[idx++] = D.m21; dst[idx++] = D.m22;
+      dst[idx++] = D.m23; dst[idx++] = D.m24; dst[idx++] = D.m25;
+      dst[idx++] = D.m30; dst[idx++] = D.m31; dst[idx++] = D.m32;
+      dst[idx++] = D.m33; dst[idx++] = D.m34; dst[idx++] = D.m35;
+      dst[idx++] = D.m40; dst[idx++] = D.m41; dst[idx++] = D.m42;
+      dst[idx++] = D.m43; dst[idx++] = D.m44; dst[idx++] = D.m45;
+      dst[idx++] = D.m50; dst[idx++] = D.m51; dst[idx++] = D.m52;
+      dst[idx++] = D.m53; dst[idx++] = D.m54; dst[idx++] = D.m55;
+   }
+
+   private static void packMaterialStiffness3Sigma (
+      double[] dst, int idx, SymmetricMatrix3d sig) {
+
+      dst[idx] = sig.m00;
+      dst[idx+1] = sig.m11;
+      dst[idx+2] = sig.m22;
+      dst[idx+3] = sig.m01;
+      dst[idx+4] = sig.m12;
+      dst[idx+5] = sig.m02;
    }
 
    private boolean addMaterialStiffness3CrsValueContributions (
@@ -4261,6 +4261,42 @@ PointAttachable, ConnectableBody {
       Matrix6d D = new Matrix6d();
       Matrix3d invJ = new Matrix3d();
 
+      int nelems = myElements.size();
+      int totalPairs = 0;
+      int totalIps = 0;
+      int totalGradVecs = 0;
+      for (FemElement3d e : myElements) {
+         int npairs = 0;
+         for (int i = 0; i < e.myNodes.length; i++) {
+            int bi = e.myNodes[i].getLocalSolveIndex();
+            if (bi != -1) {
+               for (int j = 0; j < e.myNodes.length; j++) {
+                  int bj = e.myNodes[j].getLocalSolveIndex();
+                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                     npairs++;
+                  }
+               }
+            }
+         }
+         totalPairs += npairs;
+         totalIps += e.getIntegrationPoints().length;
+         totalGradVecs += e.getIntegrationPoints().length * e.myNodes.length;
+      }
+      int[] elemNodeCounts = new int[nelems];
+      int[] elemPairOffsets = new int[nelems+1];
+      int[] elemIpOffsets = new int[nelems+1];
+      int[] elemGradOffsets = new int[nelems+1];
+      int[] pairNodeIdxs = new int[2*totalPairs];
+      int[] blockSlots = new int[9*totalPairs];
+      double[] grads = new double[3*totalGradVecs];
+      double[] Ds = new double[36*totalIps];
+      double[] sigmas = new double[6*totalIps];
+      double[] dvs = new double[totalIps];
+
+      int elemIdx = 0;
+      int pairIdx = 0;
+      int ipIdx = 0;
+      int gradVecIdx = 0;
       for (FemElement3d e : myElements) {
          FemMaterial mat = getElementMaterial(e);
          IncompMethod elemSoftIncomp =
@@ -4271,6 +4307,45 @@ PointAttachable, ConnectableBody {
          MatrixBlock[] constraints = null;
          double[] pbuf = myPressures.getBuffer();
          double[] jbuf = myAvgDetFs.getBuffer();
+
+         elemNodeCounts[elemIdx] = e.myNodes.length;
+         elemPairOffsets[elemIdx] = pairIdx;
+         elemIpOffsets[elemIdx] = ipIdx;
+         elemGradOffsets[elemIdx] = gradVecIdx;
+         for (int i = 0; i < e.myNodes.length; i++) {
+            int bi = e.myNodes[i].getLocalSolveIndex();
+            if (bi != -1) {
+               for (int j = 0; j < e.myNodes.length; j++) {
+                  int bj = e.myNodes[j].getLocalSolveIndex();
+                  if (!mySolveMatrixSymmetricP || bj >= bi) {
+                     FemNodeNeighbor nbr = e.myNbrs[i][j];
+                     pairNodeIdxs[2*pairIdx] = i;
+                     pairNodeIdxs[2*pairIdx+1] = j;
+                     int slotBase = 9*pairIdx;
+                     int blkNum = nbr.getBlockNumber();
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 0);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 1);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 2);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 0);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 1);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 2);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 0);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 1);
+                     blockSlots[slotBase++] =
+                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 2);
+                     pairIdx++;
+                  }
+               }
+            }
+         }
 
          if (elemSoftIncomp == IncompMethod.ELEMENT) {
             computePressuresAndRinv (e, imat, dpnt);
@@ -4288,6 +4363,13 @@ PointAttachable, ConnectableBody {
             double detJ = invJ.fastInvert (dpnt.getJ());
             double dv = detJ * pt.getWeight();
             Vector3d[] GNx = pt.updateShapeGradient (invJ);
+            int gradBase = 3*gradVecIdx;
+            for (int i=0; i<e.myNodes.length; i++) {
+               grads[gradBase++] = GNx[i].x;
+               grads[gradBase++] = GNx[i].y;
+               grads[gradBase++] = GNx[i].z;
+            }
+            gradVecIdx += e.myNodes.length;
             double pressure = 0;
             double avgDetF = 0;
             double[] H = null;
@@ -4324,6 +4406,10 @@ PointAttachable, ConnectableBody {
                ks = addAuxStressAndTangent (
                   sigma, D, null, auxmats, dpnt, pt, dt, ks);
             }
+            packMaterialStiffness3D (Ds, 36*ipIdx, D);
+            packMaterialStiffness3Sigma (sigmas, 6*ipIdx, sigma);
+            dvs[ipIdx] = s*dv;
+            ipIdx++;
 
             for (int i = 0; i < e.myNodes.length; i++) {
                FemNode3d nodei = e.myNodes[i];
@@ -4331,17 +4417,6 @@ PointAttachable, ConnectableBody {
                if (elemSoftIncomp == IncompMethod.ELEMENT) {
                   FemUtilities.addToIncompressConstraints (
                      constraints[i], H, GNx[i], dv);
-               }
-               if (bi != -1) {
-                  for (int j = 0; j < e.myNodes.length; j++) {
-                     int bj = e.myNodes[j].getLocalSolveIndex();
-                     if (!mySolveMatrixSymmetricP || bj >= bi) {
-                        FemNodeNeighbor nbr = e.myNbrs[i][j];
-                        context.addMaterialStiffness3CrsValueContribution (
-                           nbr.getBlockNumber(), GNx[i], D, sigma, GNx[j],
-                           dv, s);
-                     }
-                  }
                }
             }
          }
@@ -4364,7 +4439,14 @@ PointAttachable, ConnectableBody {
                }
             }
          }
+         elemIdx++;
       }
+      elemPairOffsets[nelems] = pairIdx;
+      elemIpOffsets[nelems] = ipIdx;
+      elemGradOffsets[nelems] = gradVecIdx;
+      context.addMaterialStiffness3ElementCrsValueContributions (
+         elemNodeCounts, elemPairOffsets, elemIpOffsets, elemGradOffsets,
+         pairNodeIdxs, blockSlots, grads, Ds, sigmas, dvs, nelems);
       return true;
    }
 

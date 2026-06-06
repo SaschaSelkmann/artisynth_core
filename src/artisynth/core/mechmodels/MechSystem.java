@@ -51,6 +51,20 @@ public interface MechSystem {
       private double[] myMaterialStiffness3Sigmas;
       private double[] myMaterialStiffness3Dvs;
       private int myNumMaterialStiffness3Contributions;
+      private int[] myMaterialStiffness3ElemNodeCounts;
+      private int[] myMaterialStiffness3ElemPairOffsets;
+      private int[] myMaterialStiffness3ElemIpOffsets;
+      private int[] myMaterialStiffness3ElemGradOffsets;
+      private int[] myMaterialStiffness3PairNodeIdxs;
+      private int[] myMaterialStiffness3ElemBlockSlots;
+      private double[] myMaterialStiffness3ElemGrads;
+      private double[] myMaterialStiffness3ElemDs;
+      private double[] myMaterialStiffness3ElemSigmas;
+      private double[] myMaterialStiffness3ElemDvs;
+      private int myNumMaterialStiffness3ElemContributions;
+      private int myNumMaterialStiffness3ElemPairs;
+      private int myNumMaterialStiffness3ElemIps;
+      private int myNumMaterialStiffness3ElemGradVecs;
       private int myStructureVersion;
 
       public GpuAssemblyContext (
@@ -84,6 +98,20 @@ public interface MechSystem {
          myMaterialStiffness3Sigmas = new double[0];
          myMaterialStiffness3Dvs = new double[0];
          myNumMaterialStiffness3Contributions = 0;
+         myMaterialStiffness3ElemNodeCounts = new int[0];
+         myMaterialStiffness3ElemPairOffsets = new int[] { 0 };
+         myMaterialStiffness3ElemIpOffsets = new int[] { 0 };
+         myMaterialStiffness3ElemGradOffsets = new int[] { 0 };
+         myMaterialStiffness3PairNodeIdxs = new int[0];
+         myMaterialStiffness3ElemBlockSlots = new int[0];
+         myMaterialStiffness3ElemGrads = new double[0];
+         myMaterialStiffness3ElemDs = new double[0];
+         myMaterialStiffness3ElemSigmas = new double[0];
+         myMaterialStiffness3ElemDvs = new double[0];
+         myNumMaterialStiffness3ElemContributions = 0;
+         myNumMaterialStiffness3ElemPairs = 0;
+         myNumMaterialStiffness3ElemIps = 0;
+         myNumMaterialStiffness3ElemGradVecs = 0;
       }
 
       public SparseNumberedBlockMatrix getMatrix() {
@@ -107,6 +135,13 @@ public interface MechSystem {
          myNumScaledDiagonal3Contributions = 0;
          myNumScaledBlock3Contributions = 0;
          myNumMaterialStiffness3Contributions = 0;
+         myNumMaterialStiffness3ElemContributions = 0;
+         myNumMaterialStiffness3ElemPairs = 0;
+         myNumMaterialStiffness3ElemIps = 0;
+         myNumMaterialStiffness3ElemGradVecs = 0;
+         myMaterialStiffness3ElemPairOffsets[0] = 0;
+         myMaterialStiffness3ElemIpOffsets[0] = 0;
+         myMaterialStiffness3ElemGradOffsets[0] = 0;
       }
 
       public void addCrsValueContribution (int slot, double value) {
@@ -412,6 +447,112 @@ public interface MechSystem {
          }
       }
 
+      public void addMaterialStiffness3ElementCrsValueContributions (
+         int[] elemNodeCounts, int[] elemPairOffsets, int[] elemIpOffsets,
+         int[] elemGradOffsets, int[] pairNodeIdxs, int[] blockSlots,
+         double[] grads, double[] Ds, double[] sigmas, double[] dvs,
+         int nelems) {
+
+         if (nelems == 0) {
+            return;
+         }
+         int npairs = elemPairOffsets[nelems];
+         int nips = elemIpOffsets[nelems];
+         int ngrads = elemGradOffsets[nelems];
+         if (npairs == 0 || nips == 0 || ngrads == 0) {
+            return;
+         }
+         ensureMaterialStiffness3ElementCapacity (
+            myNumMaterialStiffness3ElemContributions + nelems,
+            myNumMaterialStiffness3ElemPairs + npairs,
+            myNumMaterialStiffness3ElemIps + nips,
+            myNumMaterialStiffness3ElemGradVecs + ngrads);
+
+         int elemBase = myNumMaterialStiffness3ElemContributions;
+         int pairBase = myNumMaterialStiffness3ElemPairs;
+         int ipBase = myNumMaterialStiffness3ElemIps;
+         int gradBase = myNumMaterialStiffness3ElemGradVecs;
+
+         System.arraycopy (
+            elemNodeCounts, 0, myMaterialStiffness3ElemNodeCounts,
+            elemBase, nelems);
+         for (int i=1; i<=nelems; i++) {
+            myMaterialStiffness3ElemPairOffsets[elemBase+i] =
+               pairBase + elemPairOffsets[i];
+            myMaterialStiffness3ElemIpOffsets[elemBase+i] =
+               ipBase + elemIpOffsets[i];
+            myMaterialStiffness3ElemGradOffsets[elemBase+i] =
+               gradBase + elemGradOffsets[i];
+         }
+         System.arraycopy (
+            pairNodeIdxs, 0, myMaterialStiffness3PairNodeIdxs,
+            2*pairBase, 2*npairs);
+         System.arraycopy (
+            blockSlots, 0, myMaterialStiffness3ElemBlockSlots,
+            9*pairBase, 9*npairs);
+         System.arraycopy (
+            grads, 0, myMaterialStiffness3ElemGrads, 3*gradBase, 3*ngrads);
+         System.arraycopy (
+            Ds, 0, myMaterialStiffness3ElemDs, 36*ipBase, 36*nips);
+         System.arraycopy (
+            sigmas, 0, myMaterialStiffness3ElemSigmas, 6*ipBase, 6*nips);
+         System.arraycopy (
+            dvs, 0, myMaterialStiffness3ElemDvs, ipBase, nips);
+
+         myNumMaterialStiffness3ElemContributions += nelems;
+         myNumMaterialStiffness3ElemPairs += npairs;
+         myNumMaterialStiffness3ElemIps += nips;
+         myNumMaterialStiffness3ElemGradVecs += ngrads;
+      }
+
+      private void ensureMaterialStiffness3ElementCapacity (
+         int nelems, int npairs, int nips, int ngrads) {
+
+         if (myMaterialStiffness3ElemNodeCounts.length < nelems) {
+            int newCap = Math.max (
+               nelems,
+               Math.max (64, 2*myMaterialStiffness3ElemNodeCounts.length));
+            myMaterialStiffness3ElemNodeCounts =
+               Arrays.copyOf (myMaterialStiffness3ElemNodeCounts, newCap);
+            myMaterialStiffness3ElemPairOffsets =
+               Arrays.copyOf (myMaterialStiffness3ElemPairOffsets, newCap+1);
+            myMaterialStiffness3ElemIpOffsets =
+               Arrays.copyOf (myMaterialStiffness3ElemIpOffsets, newCap+1);
+            myMaterialStiffness3ElemGradOffsets =
+               Arrays.copyOf (myMaterialStiffness3ElemGradOffsets, newCap+1);
+         }
+         if (myMaterialStiffness3PairNodeIdxs.length < 2*npairs) {
+            int newCap = Math.max (
+               npairs, Math.max (64, myMaterialStiffness3PairNodeIdxs.length));
+            while (newCap < npairs) {
+               newCap *= 2;
+            }
+            myMaterialStiffness3PairNodeIdxs =
+               Arrays.copyOf (myMaterialStiffness3PairNodeIdxs, 2*newCap);
+            myMaterialStiffness3ElemBlockSlots =
+               Arrays.copyOf (myMaterialStiffness3ElemBlockSlots, 9*newCap);
+         }
+         if (myMaterialStiffness3ElemDvs.length < nips) {
+            int newCap = Math.max (
+               nips, Math.max (64, 2*myMaterialStiffness3ElemDvs.length));
+            myMaterialStiffness3ElemDs =
+               Arrays.copyOf (myMaterialStiffness3ElemDs, 36*newCap);
+            myMaterialStiffness3ElemSigmas =
+               Arrays.copyOf (myMaterialStiffness3ElemSigmas, 6*newCap);
+            myMaterialStiffness3ElemDvs =
+               Arrays.copyOf (myMaterialStiffness3ElemDvs, newCap);
+         }
+         if (myMaterialStiffness3ElemGrads.length < 3*ngrads) {
+            int newCap = Math.max (
+               ngrads, Math.max (64, myMaterialStiffness3ElemGrads.length));
+            while (newCap < ngrads) {
+               newCap *= 2;
+            }
+            myMaterialStiffness3ElemGrads =
+               Arrays.copyOf (myMaterialStiffness3ElemGrads, 3*newCap);
+         }
+      }
+
       public int numCrsValueContributions() {
          return myNumCrsValueContributions;
       }
@@ -456,6 +597,58 @@ public interface MechSystem {
          return myNumMaterialStiffness3Contributions;
       }
 
+      public int numMaterialStiffness3ElementContributions() {
+         return myNumMaterialStiffness3ElemContributions;
+      }
+
+      public int numMaterialStiffness3ElementPairs() {
+         return myNumMaterialStiffness3ElemPairs;
+      }
+
+      public int numMaterialStiffness3ElementIps() {
+         return myNumMaterialStiffness3ElemIps;
+      }
+
+      public int[] getMaterialStiffness3ElementNodeCounts() {
+         return myMaterialStiffness3ElemNodeCounts;
+      }
+
+      public int[] getMaterialStiffness3ElementPairOffsets() {
+         return myMaterialStiffness3ElemPairOffsets;
+      }
+
+      public int[] getMaterialStiffness3ElementIpOffsets() {
+         return myMaterialStiffness3ElemIpOffsets;
+      }
+
+      public int[] getMaterialStiffness3ElementGradOffsets() {
+         return myMaterialStiffness3ElemGradOffsets;
+      }
+
+      public int[] getMaterialStiffness3ElementPairNodeIdxs() {
+         return myMaterialStiffness3PairNodeIdxs;
+      }
+
+      public int[] getMaterialStiffness3ElementBlockSlots() {
+         return myMaterialStiffness3ElemBlockSlots;
+      }
+
+      public double[] getMaterialStiffness3ElementGrads() {
+         return myMaterialStiffness3ElemGrads;
+      }
+
+      public double[] getMaterialStiffness3ElementDs() {
+         return myMaterialStiffness3ElemDs;
+      }
+
+      public double[] getMaterialStiffness3ElementSigmas() {
+         return myMaterialStiffness3ElemSigmas;
+      }
+
+      public double[] getMaterialStiffness3ElementDvs() {
+         return myMaterialStiffness3ElemDvs;
+      }
+
       public int[] getMaterialStiffness3ContributionSlots() {
          return myMaterialStiffness3Slots;
       }
@@ -484,16 +677,20 @@ public interface MechSystem {
          return (myNumCrsValueContributions > 0 ||
                  myNumScaledDiagonal3Contributions > 0 ||
                  myNumScaledBlock3Contributions > 0 ||
-                 myNumMaterialStiffness3Contributions > 0);
+                 myNumMaterialStiffness3Contributions > 0 ||
+                 myNumMaterialStiffness3ElemContributions > 0);
       }
 
       public String getContributionSummary() {
          return String.format (
-            "generic=%d diag3=%d block3=%d material3=%d",
+            "generic=%d diag3=%d block3=%d material3=%d materialElem3=%d/%d/%d",
             myNumCrsValueContributions,
             myNumScaledDiagonal3Contributions,
             myNumScaledBlock3Contributions,
-            myNumMaterialStiffness3Contributions);
+            myNumMaterialStiffness3Contributions,
+            myNumMaterialStiffness3ElemContributions,
+            myNumMaterialStiffness3ElemIps,
+            myNumMaterialStiffness3ElemPairs);
       }
 
       /**

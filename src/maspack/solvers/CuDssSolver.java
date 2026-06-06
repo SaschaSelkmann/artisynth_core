@@ -102,6 +102,11 @@ public class CuDssSolver implements DirectSolver {
       long handle, int[] blockSlots, double[] gis, double[] gjs,
       double[] Ds, double[] sigmas, double[] dvs, int nblocks,
       double scale);
+   private static native int    doAddMaterialStiffness3ElementDeviceValues (
+      long handle, int[] elemNodeCounts, int[] elemPairOffsets,
+      int[] elemIpOffsets, int[] elemGradOffsets, int[] pairNodeIdxs,
+      int[] blockSlots, double[] grads, double[] Ds, double[] sigmas,
+      double[] dvs, int nelems, double scale);
    private static native int    doFactorDeviceValues (long handle);
    private static native int    doSolve   (long handle, double[] b, double[] x);
    private static native int    doSolveMulti (
@@ -511,6 +516,51 @@ public class CuDssSolver implements DirectSolver {
             myHandle, blockSlots, gis, gjs, Ds, sigmas, dvs,
             nblocks, scale),
          "addMaterialStiffness3DeviceValues");
+   }
+
+   /**
+    * Computes and adds compact element-batched 3x3 material stiffness
+    * contributions on the GPU. Per element, {@code elemPairOffsets} indexes
+    * K-node-pair data, {@code elemIpOffsets} indexes D/sigma/dv data, and
+    * {@code elemGradOffsets} indexes gradient vectors. Each pair stores two
+    * node indices and 9 CRS slots; each integration point stores one 6x6 D,
+    * one symmetric sigma, one dv, and {@code elemNodeCounts[e]} gradients.
+    */
+   public synchronized void addMaterialStiffness3ElementDeviceValues (
+      int[] elemNodeCounts, int[] elemPairOffsets, int[] elemIpOffsets,
+      int[] elemGradOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      double[] grads, double[] Ds, double[] sigmas, double[] dvs,
+      int nelems, double scale) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      if (nelems < 0 ||
+          nelems > elemNodeCounts.length ||
+          nelems+1 > elemPairOffsets.length ||
+          nelems+1 > elemIpOffsets.length ||
+          nelems+1 > elemGradOffsets.length) {
+         throw new IllegalArgumentException (
+            "nelems exceeds compact material stiffness element arrays");
+      }
+      int npairs = elemPairOffsets[nelems];
+      int nips = elemIpOffsets[nelems];
+      int ngrads = elemGradOffsets[nelems];
+      if (npairs < 0 || nips < 0 || ngrads < 0 ||
+          npairs > pairNodeIdxs.length/2 ||
+          npairs > blockSlots.length/9 ||
+          nips > Ds.length/36 ||
+          nips > sigmas.length/6 ||
+          nips > dvs.length ||
+          ngrads > grads.length/3) {
+         throw new IllegalArgumentException (
+            "compact material stiffness descriptor arrays are inconsistent");
+      }
+      check (
+         doAddMaterialStiffness3ElementDeviceValues (
+            myHandle, elemNodeCounts, elemPairOffsets, elemIpOffsets,
+            elemGradOffsets, pairNodeIdxs, blockSlots, grads, Ds, sigmas,
+            dvs, nelems, scale),
+         "addMaterialStiffness3ElementDeviceValues");
    }
 
    /**
