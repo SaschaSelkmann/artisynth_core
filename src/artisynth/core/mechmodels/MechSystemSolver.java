@@ -22,6 +22,7 @@ import maspack.matrix.Matrix;
 import maspack.matrix.Matrix3dBase;
 import maspack.matrix.Matrix3x1;
 import maspack.matrix.Matrix3x2;
+import maspack.matrix.Matrix3x3Block;
 import maspack.matrix.Matrix6x1;
 import maspack.matrix.Matrix6x2;
 import maspack.matrix.Matrix6dBase;
@@ -1500,6 +1501,35 @@ public class MechSystemSolver {
       return true;
    }
 
+   private boolean addMassBlockToCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, MatrixBlock srcBlk,
+      MatrixBlock dstBlk, double s) {
+
+      if (dstBlk == null || srcBlk == null) {
+         return false;
+      }
+      if (srcBlk instanceof Matrix3x3Block &&
+          dstBlk.rowSize() == 3 && dstBlk.colSize() == 3) {
+         Matrix3x3Block M = (Matrix3x3Block)srcBlk;
+         if (M.m01 == 0 && M.m02 == 0 && M.m10 == 0 && M.m12 == 0 &&
+             M.m20 == 0 && M.m21 == 0 &&
+             M.m00 == M.m11 && M.m00 == M.m22) {
+            SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+               context.getSlotMap();
+            context.addScaledDiagonal3CrsValueContribution (
+               slotMap.getBlockValueSlot (dstBlk, 0, 0),
+               slotMap.getBlockValueSlot (dstBlk, 1, 1),
+               slotMap.getBlockValueSlot (dstBlk, 2, 2), s*M.m00);
+         }
+         else {
+            context.addScaledBlock3CrsValueContribution (
+               dstBlk.getBlockNumber(), s, M);
+         }
+         return true;
+      }
+      return addBlockToCrsValueContributions (context, srcBlk, dstBlk, s);
+   }
+
    private boolean addSparseBlockMatrixToCrsValues (
       MechSystem.GpuAssemblyContext context, SparseBlockMatrix M,
       int numBlkRows, int numBlkCols, double s) {
@@ -1547,9 +1577,21 @@ public class MechSystemSolver {
    private boolean addActiveMassMatrixCrsValueContributions (
       MechSystem.GpuAssemblyContext context) {
 
-      return addSparseBlockMatrixToCrsValueContributions (
-         context, myMass, mySys.numActiveComponents(),
-         mySys.numActiveComponents(), 1);
+      SparseNumberedBlockMatrix S = context.getMatrix();
+      int numBlkRows = mySys.numActiveComponents();
+      int numBlkCols = mySys.numActiveComponents();
+      for (int bi=0; bi<numBlkRows; bi++) {
+         for (MatrixBlock blk=myMass.firstBlockInRow(bi);
+              blk != null && blk.getBlockCol() < numBlkCols;
+              blk=blk.next()) {
+            MatrixBlock dstBlk = S.getBlock (bi, blk.getBlockCol());
+            if (!addMassBlockToCrsValueContributions (
+                   context, blk, dstBlk, 1)) {
+               return false;
+            }
+         }
+      }
+      return true;
    }
 
    private MechSystem.GpuAssemblyContext createKktMDeviceContributionContext (
