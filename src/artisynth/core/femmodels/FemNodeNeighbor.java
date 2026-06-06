@@ -203,15 +203,25 @@ public class FemNodeNeighbor {
       if (!slotMap.hasBlockSlots (blkNum)) {
          return;
       }
-      vals[slotMap.getBlockSlot (blkNum, 0)] += s*K.m00;
-      vals[slotMap.getBlockSlot (blkNum, 1)] += s*K.m01;
-      vals[slotMap.getBlockSlot (blkNum, 2)] += s*K.m02;
-      vals[slotMap.getBlockSlot (blkNum, 3)] += s*K.m10;
-      vals[slotMap.getBlockSlot (blkNum, 4)] += s*K.m11;
-      vals[slotMap.getBlockSlot (blkNum, 5)] += s*K.m12;
-      vals[slotMap.getBlockSlot (blkNum, 6)] += s*K.m20;
-      vals[slotMap.getBlockSlot (blkNum, 7)] += s*K.m21;
-      vals[slotMap.getBlockSlot (blkNum, 8)] += s*K.m22;
+      addCrsValue (vals, slotMap, blkNum, 0, 0, s*K.m00);
+      addCrsValue (vals, slotMap, blkNum, 0, 1, s*K.m01);
+      addCrsValue (vals, slotMap, blkNum, 0, 2, s*K.m02);
+      addCrsValue (vals, slotMap, blkNum, 1, 0, s*K.m10);
+      addCrsValue (vals, slotMap, blkNum, 1, 1, s*K.m11);
+      addCrsValue (vals, slotMap, blkNum, 1, 2, s*K.m12);
+      addCrsValue (vals, slotMap, blkNum, 2, 0, s*K.m20);
+      addCrsValue (vals, slotMap, blkNum, 2, 1, s*K.m21);
+      addCrsValue (vals, slotMap, blkNum, 2, 2, s*K.m22);
+   }
+
+   private static void addCrsValue (
+      double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      int blkNum, int i, int j, double value) {
+
+      int slot = slotMap.getBlockValueSlot (blkNum, i, j);
+      if (slot != -1) {
+         vals[slot] += value;
+      }
    }
 
    private static void addScaledMatrixToCrsContributions (
@@ -226,15 +236,26 @@ public class FemNodeNeighbor {
       if (!slotMap.hasBlockSlots (blkNum)) {
          return;
       }
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 0), s*K.m00);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 1), s*K.m01);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 2), s*K.m02);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 3), s*K.m10);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 4), s*K.m11);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 5), s*K.m12);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 6), s*K.m20);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 7), s*K.m21);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 8), s*K.m22);
+      addCrsValueContribution (context, slotMap, blkNum, 0, 0, s*K.m00);
+      addCrsValueContribution (context, slotMap, blkNum, 0, 1, s*K.m01);
+      addCrsValueContribution (context, slotMap, blkNum, 0, 2, s*K.m02);
+      addCrsValueContribution (context, slotMap, blkNum, 1, 0, s*K.m10);
+      addCrsValueContribution (context, slotMap, blkNum, 1, 1, s*K.m11);
+      addCrsValueContribution (context, slotMap, blkNum, 1, 2, s*K.m12);
+      addCrsValueContribution (context, slotMap, blkNum, 2, 0, s*K.m20);
+      addCrsValueContribution (context, slotMap, blkNum, 2, 1, s*K.m21);
+      addCrsValueContribution (context, slotMap, blkNum, 2, 2, s*K.m22);
+   }
+
+   private static void addCrsValueContribution (
+      MechSystem.GpuAssemblyContext context,
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+      int blkNum, int i, int j, double value) {
+
+      int slot = slotMap.getBlockValueSlot (blkNum, i, j);
+      if (slot != -1) {
+         context.addCrsValueContribution (slot, value);
+      }
    }
 
    private static void addMassDampingToCrs (
@@ -247,9 +268,9 @@ public class FemNodeNeighbor {
       if (!slotMap.hasBlockSlots (blkNum)) {
          return;
       }
-      vals[slotMap.getBlockSlot (blkNum, 0)] += d;
-      vals[slotMap.getBlockSlot (blkNum, 4)] += d;
-      vals[slotMap.getBlockSlot (blkNum, 8)] += d;
+      addCrsValue (vals, slotMap, blkNum, 0, 0, d);
+      addCrsValue (vals, slotMap, blkNum, 1, 1, d);
+      addCrsValue (vals, slotMap, blkNum, 2, 2, d);
    }
 
    private static void addMassDampingToCrsContributions (
@@ -263,9 +284,9 @@ public class FemNodeNeighbor {
       if (!slotMap.hasBlockSlots (blkNum)) {
          return;
       }
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 0), d);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 4), d);
-      context.addCrsValueContribution (slotMap.getBlockSlot (blkNum, 8), d);
+      addCrsValueContribution (context, slotMap, blkNum, 0, 0, d);
+      addCrsValueContribution (context, slotMap, blkNum, 1, 1, d);
+      addCrsValueContribution (context, slotMap, blkNum, 2, 2, d);
    }
 
    public void addVelJacobian (

@@ -291,6 +291,11 @@ public class KKTSolver {
       return myLastFactorUsedDeviceValues;
    }
 
+   public boolean canFactorDeviceMContributions() {
+      return (myCuDss != null && myKktDeviceValuesEnabled &&
+              myKktMBlockSlotMap != null);
+   }
+
    double[] getCRSValuesForTesting() {
       return Arrays.copyOf (myVals, myNumVals);
    }
@@ -410,7 +415,7 @@ public class KKTSolver {
             if (myIndices1Based) {
                myLocalOffs[i]--;
             }
-         }    
+         }
          if (myPartitionM == Partition.Full) {
             GT.getBlockCCSValues (
                myVals, myLocalOffs, Partition.Full, sizeM, numG);
@@ -441,6 +446,52 @@ public class KKTSolver {
             msec (tGTLower-tGTUpper), msec (tRg-tGTLower),
             sizeM, numG, numVals,
             M instanceof SparseBlockMatrix ? "SparseBlockMatrix" : "VectorNd");
+      }
+   }
+
+   private void getCRSValuesWithoutM (
+      Object M, int sizeM, int numVals, SparseBlockMatrix GT, VectorNd Rg) {
+
+      Arrays.fill (myVals, 0, numVals, 0);
+      for (int i = 0; i < sizeM; i++) {
+         myLocalOffs[i] = myRowOffs[i];
+         if (myIndices1Based) {
+            myLocalOffs[i]--;
+         }
+      }
+      if (M instanceof SparseBlockMatrix) {
+         ((SparseBlockMatrix)M).addNumNonZerosByRow (
+            myLocalOffs, 0, myPartitionM, sizeM, sizeM);
+      }
+      else {
+         for (int i = 0; i < sizeM; i++) {
+            myLocalOffs[i]++;
+         }
+      }
+      int numG = (GT != null ? GT.colSize() : 0);
+      if (GT != null) {
+         GT.getBlockCRSValues (myVals, myLocalOffs, Partition.Full, sizeM, numG);
+         for (int i=0; i<numG; i++) {
+            myLocalOffs[i] = myRowOffs[sizeM+i];
+            if (myIndices1Based) {
+               myLocalOffs[i]--;
+            }
+         }
+         if (myPartitionM == Partition.Full) {
+            GT.getBlockCCSValues (
+               myVals, myLocalOffs, Partition.Full, sizeM, numG);
+         }
+         if (Rg != null) {
+            double[] Rgbuf = Rg.getBuffer();
+            for (int i=0; i<numG; i++) {
+               myVals[myLocalOffs[i]++] = -Rgbuf[i];
+            }
+         }
+         else {
+            for (int i=0; i<numG; i++) {
+               myVals[myLocalOffs[i]++] = 0;
+            }
+         }
       }
    }
 
@@ -560,6 +611,31 @@ public class KKTSolver {
       myState = State.FACTORED;
       long t1 = System.nanoTime();
       //System.out.println ("factor " + (t1-t0)*1e-6);
+   }
+
+   public boolean factorDeviceMContributions (
+      SparseBlockMatrix M, int sizeM, SparseBlockMatrix GT, VectorNd Rg,
+      SparseBlockMatrix NT, VectorNd Rn,
+      int[] mSlots, double[] mVals, int numMVals) {
+
+      if (!canFactorDeviceMContributions()) {
+         return false;
+      }
+      long t0 = System.nanoTime();
+      checkMGStructure (M, sizeM, GT);
+      factorMGDeviceMContributions (
+         M, sizeM, GT, Rg, mSlots, mVals, numMVals);
+
+      if (NT != null && NT.colSize() != 0) {
+         if ((myTypeM & Matrix.SYMMETRIC) == 0) {
+            warnAboutUnsymmetricUnilateralSolves();
+         }
+         buildLCP (NT, Rn, null, null);
+      }
+      myState = State.FACTORED;
+      long t1 = System.nanoTime();
+      // System.out.println ("factorDeviceMContributions " + (t1-t0)*1e-6);
+      return true;
    }
 
    /**
@@ -1833,6 +1909,26 @@ public class KKTSolver {
                ", nnz=" + myNumVals + ", error=" + myPardiso.getErrorMessage());
          }
       }
+      myNumN = 0;
+      myNT = null;
+      myDT = null;
+   }
+
+   private void factorMGDeviceMContributions (
+      Object M, int sizeM, SparseBlockMatrix GT, VectorNd Rg,
+      int[] mSlots, double[] mVals, int numMVals) {
+
+      if (myCuDss == null) {
+         throw new ImproperStateException (
+            "device M contributions require cuDSS");
+      }
+      getCRSValuesWithoutM (M, sizeM, myNumVals, GT, Rg);
+      myLastFactorUsedDeviceValues = false;
+      myCuDss.clearDeviceValues();
+      myCuDss.addDeviceValues (myValueSlots, myVals, myNumVals, 1.0);
+      myCuDss.addDeviceValues (mSlots, mVals, numMVals, 1.0);
+      myCuDss.factorDeviceValues();
+      myLastFactorUsedDeviceValues = true;
       myNumN = 0;
       myNT = null;
       myDT = null;

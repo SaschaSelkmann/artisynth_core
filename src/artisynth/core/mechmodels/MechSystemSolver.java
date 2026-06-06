@@ -1499,6 +1499,41 @@ public class MechSystemSolver {
          mySys.numActiveComponents(), 1);
    }
 
+   private MechSystem.GpuAssemblyContext createKktMDeviceContributionContext (
+      KKTSolver solver, SparseNumberedBlockMatrix S,
+      int velSize, double a0, double a1) {
+
+      if (!solver.canFactorDeviceMContributions()) {
+         return null;
+      }
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+         solver.getKktMBlockSlotMap();
+      if (slotMap == null) {
+         return null;
+      }
+      MechSystem.GpuAssemblyContext context =
+         new MechSystem.GpuAssemblyContext (
+            S, slotMap, mySolveMatrixVersion);
+      context.clearCrsValues();
+      context.clearCrsValueContributions();
+      boolean complete = true;
+      if (a0 != 0 && a1 != 0) {
+         complete &=
+            mySys.assembleGpuVelJacobianCrsValueContributions (
+               context, null, a0);
+         complete &=
+            mySys.assembleGpuPosJacobianCrsValueContributions (
+               context, null, a1);
+      }
+      complete &= addActiveMassMatrixCrsValueContributions (context);
+      if (!complete) {
+         maybeWarnGpuAssemblyDirectCrsFallback (
+            "KKT M direct CRS contributions were not fully assembled");
+         return null;
+      }
+      return context;
+   }
+
    private boolean canUseGpuAssemblyDirectCrs (
       boolean crsAssembled, int vsize,
       MechSystem.GpuAssemblyContext context) {
@@ -2533,17 +2568,33 @@ public class MechSystemSolver {
                   timerStop ("    KKT solve: analyze", myKKTTimer);
                }
             }
+            MechSystem.GpuAssemblyContext kktMDeviceContext =
+               createKktMDeviceContributionContext (
+                  myKKTSolver, S, velSize, a0, a1);
             if (myHybridSolveP && !analyze && myNT.colSize() == 0) {
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStart (myKKTTimer);
                }
-               myKKTSolver.factorAndSolve (
-                  S, velSize, myGT, myRg, vel, myLam, bf, myBg, myHybridSolveTol);
+               if (kktMDeviceContext != null &&
+                   myKKTSolver.factorDeviceMContributions (
+                      S, velSize, myGT, myRg, null, null,
+                      kktMDeviceContext.getCrsValueContributionSlots(),
+                      kktMDeviceContext.getCrsValueContributions(),
+                      kktMDeviceContext.numCrsValueContributions())) {
+                  myKKTSolver.solve (vel, myLam, bf, myBg);
+               }
+               else {
+                  myKKTSolver.factorAndSolve (
+                     S, velSize, myGT, myRg, vel, myLam, bf, myBg,
+                     myHybridSolveTol);
+               }
                maybeReportGpuAssemblyStatus (
                   "kktFactor", false,
                   myKKTSolver.lastFactorUsedDeviceValues(),
                   myKKTSolver.lastFactorUsedDeviceValues() ?
-                     "kktDeviceValues" : "kktHostValues",
+                     (kktMDeviceContext != null ?
+                        "kktDeviceMContributions" : "kktDeviceValues") :
+                     "kktHostValues",
                   velSize + myGsize);
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStop ("    KKT solve: factorAndSolve(hybrid)", myKKTTimer);
@@ -2553,12 +2604,21 @@ public class MechSystemSolver {
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStart (myKKTTimer);
                }
-               myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
+               if (kktMDeviceContext == null ||
+                   !myKKTSolver.factorDeviceMContributions (
+                      S, velSize, myGT, myRg, myNT, myRn,
+                      kktMDeviceContext.getCrsValueContributionSlots(),
+                      kktMDeviceContext.getCrsValueContributions(),
+                      kktMDeviceContext.numCrsValueContributions())) {
+                  myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
+               }
                maybeReportGpuAssemblyStatus (
                   "kktFactor", false,
                   myKKTSolver.lastFactorUsedDeviceValues(),
                   myKKTSolver.lastFactorUsedDeviceValues() ?
-                     "kktDeviceValues" : "kktHostValues",
+                     (kktMDeviceContext != null ?
+                        "kktDeviceMContributions" : "kktDeviceValues") :
+                     "kktHostValues",
                   velSize + myGsize);
                myKKTSolver.solve (vel, myLam, myThe, bf, myBg, myBn);
                if (profileKKTSolveTime|profileImplicitFriction) {

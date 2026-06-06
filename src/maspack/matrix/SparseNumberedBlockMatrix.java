@@ -28,16 +28,23 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
       private int myNumVals;
       private int[] myBlockOffs;
       private int[] mySlots;
+      private int[] myFullBlockOffs;
+      private int[] myFullBlockColSizes;
+      private int[] myFullSlots;
 
       CrsBlockSlotMap (
          Partition part, int numRows, int numCols, int numVals,
-         int[] blockOffs, int[] slots) {
+         int[] blockOffs, int[] slots, int[] fullBlockOffs,
+         int[] fullBlockColSizes, int[] fullSlots) {
          myPart = part;
          myNumRows = numRows;
          myNumCols = numCols;
          myNumVals = numVals;
          myBlockOffs = blockOffs;
          mySlots = slots;
+         myFullBlockOffs = fullBlockOffs;
+         myFullBlockColSizes = fullBlockColSizes;
+         myFullSlots = fullSlots;
       }
 
       public Partition getPartition() {
@@ -94,6 +101,22 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
          }
          int localSlotIdx = localSlotIndex (blk, i, j, blkPart);
          return getBlockSlot (blk.getBlockNumber(), localSlotIdx);
+      }
+
+      public int getBlockValueSlot (int blockNumber, int i, int j) {
+         checkBlockNumber (blockNumber);
+         int off = myFullBlockOffs[blockNumber];
+         int nextOff = myFullBlockOffs[blockNumber+1];
+         if (off == nextOff) {
+            return -1;
+         }
+         int colSize = myFullBlockColSizes[blockNumber];
+         int idx = off + i*colSize + j;
+         if (idx < off || idx >= nextOff) {
+            throw new IllegalArgumentException (
+               "block entry ("+i+","+j+") out of range");
+         }
+         return myFullSlots[idx];
       }
 
       public int[] getSlots() {
@@ -417,6 +440,8 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
       }
 
       int[] blockOffs = new int[myMaxNumber+1];
+      int[] fullBlockOffs = new int[myMaxNumber+1];
+      int[] fullBlockColSizes = new int[myMaxNumber];
       for (int bi=0; bi<numBlkRows; bi++) {
          for (MatrixBlock blk=myRows[bi].myHead;
               blk != null && blk.getBlockCol() < numBlkCols;
@@ -424,15 +449,20 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
             int num = blk.getBlockNumber();
             blockOffs[num+1] = numStoredEntries (
                blk, blockPartition (blk, part));
+            fullBlockOffs[num+1] = blk.rowSize()*blk.colSize();
+            fullBlockColSizes[num] = blk.colSize();
          }
       }
       for (int i=0; i<myMaxNumber; i++) {
          blockOffs[i+1] += blockOffs[i];
+         fullBlockOffs[i+1] += fullBlockOffs[i];
       }
 
       int[] nextBlockOffs = Arrays.copyOf (blockOffs, blockOffs.length);
       int[] nextRowOffs = Arrays.copyOf (rowOffs, rowOffs.length);
       int[] slots = new int[blockOffs[myMaxNumber]];
+      int[] fullSlots = new int[fullBlockOffs[myMaxNumber]];
+      Arrays.fill (fullSlots, -1);
 
       for (int bi=0; bi<numBlkRows; bi++) {
          int rowBase = myRowOffsets[bi];
@@ -453,6 +483,8 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
                            "mapped slot "+slot+" exceeds target CRS values");
                      }
                      slots[nextBlockOffs[num]++] = slot;
+                     fullSlots[
+                        fullBlockOffs[num] + i*blk.colSize() + j] = slot;
                   }
                }
             }
@@ -460,7 +492,8 @@ public class SparseNumberedBlockMatrix extends SparseBlockMatrix {
       }
 
       return new CrsBlockSlotMap (
-         part, numRows, numCols, numVals, blockOffs, slots);
+         part, numRows, numCols, numVals, blockOffs, slots,
+         fullBlockOffs, fullBlockColSizes, fullSlots);
    }
 
    public CrsBlockSlotMap createCrsBlockSlotMap (Partition part) {

@@ -863,7 +863,7 @@ public class KKTSolverTest {
          GTblk.setRandom();
          Mblk.setRandom();
          Mblk.mulTranspose (Mblk);
-         SparseBlockMatrix M = new SparseBlockMatrix();
+         SparseNumberedBlockMatrix M = new SparseNumberedBlockMatrix();
          M.addBlock (0, 0, Mblk);
          SparseBlockMatrix GT = new SparseBlockMatrix();
          GT.addBlock (0, 0, GTblk);
@@ -898,6 +898,40 @@ public class KKTSolverTest {
 
          requireClose ("kkt device values vel", velC, velP, 1e-8);
          requireClose ("kkt device values lam", lamC, lamP, 1e-8);
+
+         KKTSolver cudssContrib = new KKTSolver (SparseSolverId.CuDss);
+         cudssContrib.analyze (M, 6, GT, Rg, Matrix.SYMMETRIC);
+         SparseNumberedBlockMatrix.CrsBlockSlotMap map =
+            cudssContrib.getKktMBlockSlotMap();
+         int[] slots = new int[map.numMappedBlockValues()];
+         double[] vals = new double[map.numMappedBlockValues()];
+         int nvals = 0;
+         for (int bi=0; bi<M.numBlockRows(); bi++) {
+            for (MatrixBlock blk=M.firstBlockInRow(bi);
+                 blk!=null; blk=blk.next()) {
+               for (int i=0; i<blk.rowSize(); i++) {
+                  for (int j=0; j<blk.colSize(); j++) {
+                     int slot = map.getBlockValueSlot (blk, i, j);
+                     if (slot != -1) {
+                        slots[nvals] = slot;
+                        vals[nvals++] = blk.get (i, j);
+                     }
+                  }
+               }
+            }
+         }
+         if (!cudssContrib.factorDeviceMContributions (
+                M, 6, GT, Rg, null, null, slots, vals, nvals)) {
+            throw new TestException (
+               "cuDSS KKT factor did not accept M contributions");
+         }
+         VectorNd velM = new VectorNd (6);
+         VectorNd lamM = new VectorNd (3);
+         cudssContrib.solve (velM, lamM, bm, bg);
+         cudssContrib.dispose();
+
+         requireClose ("kkt M contributions vel", velM, velP, 1e-8);
+         requireClose ("kkt M contributions lam", lamM, lamP, 1e-8);
       }
       finally {
          KKTSolver.setKktDeviceValuesEnabled (oldEnable);
