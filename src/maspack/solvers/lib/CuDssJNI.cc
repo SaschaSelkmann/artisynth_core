@@ -89,6 +89,31 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddDeviceValues
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL
+Java_maspack_solvers_CuDssSolver_doAddScaledDiagonal3DeviceValues
+  (JNIEnv* env, jclass /*cls*/, jlong handle,
+   jintArray diagSlots, jdoubleArray masses, jint nblocks, jdouble scale) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   jint* diagSlotsP = env->GetIntArrayElements (diagSlots, nullptr);
+   jdouble* massesP = env->GetDoubleArrayElements (masses, nullptr);
+   if (!diagSlotsP || !massesP) {
+      if (diagSlotsP) {
+         env->ReleaseIntArrayElements (diagSlots, diagSlotsP, JNI_ABORT);
+      }
+      if (massesP) {
+         env->ReleaseDoubleArrayElements (masses, massesP, JNI_ABORT);
+      }
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = b->addScaledDiagonal3DeviceValues (
+      (const int*)diagSlotsP, (const double*)massesP,
+      (int)nblocks, (double)scale);
+   env->ReleaseIntArrayElements (diagSlots, diagSlotsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (masses, massesP, JNI_ABORT);
+   return (jint)status;
+}
+
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactorDeviceValues
   (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
    CuDssBridge* b = asBridge (handle);

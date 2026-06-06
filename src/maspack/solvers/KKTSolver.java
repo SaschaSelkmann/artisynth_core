@@ -618,13 +618,25 @@ public class KKTSolver {
       SparseBlockMatrix NT, VectorNd Rn,
       int[] mSlots, double[] mVals, int numMVals) {
 
+      return factorDeviceMContributions (
+         M, sizeM, GT, Rg, NT, Rn, mSlots, mVals, numMVals,
+         null, null, 0);
+   }
+
+   public boolean factorDeviceMContributions (
+      SparseBlockMatrix M, int sizeM, SparseBlockMatrix GT, VectorNd Rg,
+      SparseBlockMatrix NT, VectorNd Rn,
+      int[] mSlots, double[] mVals, int numMVals,
+      int[] diag3Slots, double[] diag3Vals, int numDiag3Vals) {
+
       if (!canFactorDeviceMContributions()) {
          return false;
       }
       long t0 = System.nanoTime();
       checkMGStructure (M, sizeM, GT);
       factorMGDeviceMContributions (
-         M, sizeM, GT, Rg, mSlots, mVals, numMVals);
+         M, sizeM, GT, Rg, mSlots, mVals, numMVals,
+         diag3Slots, diag3Vals, numDiag3Vals);
 
       if (NT != null && NT.colSize() != 0) {
          if ((myTypeM & Matrix.SYMMETRIC) == 0) {
@@ -1916,7 +1928,8 @@ public class KKTSolver {
 
    private void factorMGDeviceMContributions (
       Object M, int sizeM, SparseBlockMatrix GT, VectorNd Rg,
-      int[] mSlots, double[] mVals, int numMVals) {
+      int[] mSlots, double[] mVals, int numMVals,
+      int[] diag3Slots, double[] diag3Vals, int numDiag3Vals) {
 
       if (myCuDss == null) {
          throw new ImproperStateException (
@@ -1927,6 +1940,10 @@ public class KKTSolver {
       myCuDss.clearDeviceValues();
       myCuDss.addDeviceValues (myValueSlots, myVals, myNumVals, 1.0);
       myCuDss.addDeviceValues (mSlots, mVals, numMVals, 1.0);
+      if (numDiag3Vals > 0) {
+         myCuDss.addScaledDiagonal3DeviceValues (
+            diag3Slots, diag3Vals, numDiag3Vals, 1.0);
+      }
       myCuDss.factorDeviceValues();
       myLastFactorUsedDeviceValues = true;
       myNumN = 0;

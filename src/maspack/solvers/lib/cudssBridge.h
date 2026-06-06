@@ -88,6 +88,8 @@ public:
    int clearDeviceValues();
    int addDeviceValues (
       const int* slots, const double* addVals, int nvals, double scale);
+   int addScaledDiagonal3DeviceValues (
+      const int* diagSlots, const double* masses, int nblocks, double scale);
    int factorDeviceValues();
 
    // Copy b[] H->D, run CUDSS_PHASE_SOLVE, copy x[] D->H. Both arrays length n.

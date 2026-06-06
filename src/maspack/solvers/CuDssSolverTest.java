@@ -396,6 +396,34 @@ public class CuDssSolverTest extends UnitTest {
       finally { s.dispose(); }
    }
 
+   private void testScaledDiagonal3DeviceContribution() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         double[] zeroVals = { 0, 0, 0 };
+         int[] cols = { 0, 1, 2 };
+         int[] rows = { 0, 1, 2, 3 };
+         s.analyze (zeroVals, cols, rows, 3, Matrix.SPD);
+
+         int[] diagSlots = { 0, 1, 2 };
+         double[] masses = { 2.0 };
+         s.clearDeviceValues();
+         s.addScaledDiagonal3DeviceValues (diagSlots, masses, 1, 2.0);
+         s.factorDeviceValues();
+
+         double[] x = new double[3];
+         s.solve (x, new double[] { 4, 8, 12 });
+         for (int i=0; i<3; i++) {
+            double expected = i + 1;
+            if (Math.abs (x[i] - expected) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "scaled diagonal3 device contribution x[" + i + "]=" +
+                  x[i] + " expected " + expected);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
    // Refactor with same pattern via array entry points.
    private void testArrayCsrRefactor() {
       CuDssSolver s = new CuDssSolver();
@@ -607,6 +635,7 @@ public class CuDssSolverTest extends UnitTest {
       // Stage B additions
       testArrayCsrSpdRoundtrip();
       testDeviceValueAssembly();
+      testScaledDiagonal3DeviceContribution();
       testArrayCsrRefactor();
       testMultiRhsConsistency();
       testMultiRhsGrowShrink();

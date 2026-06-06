@@ -75,6 +75,14 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddDeviceValues
 
 /*
  * Class:     maspack_solvers_CuDssSolver
+ * Method:    doAddScaledDiagonal3DeviceValues
+ * Signature: (J[I[DID)I
+ */
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddScaledDiagonal3DeviceValues
+  (JNIEnv *, jclass, jlong, jintArray, jdoubleArray, jint, jdouble);
+
+/*
+ * Class:     maspack_solvers_CuDssSolver
  * Method:    doFactorDeviceValues
  * Signature: (J)I
  */

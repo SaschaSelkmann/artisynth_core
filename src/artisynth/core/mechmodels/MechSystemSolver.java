@@ -1841,6 +1841,10 @@ public class MechSystemSolver {
                      directCrsContext.getCrsValueContributionSlots(),
                      directCrsContext.getCrsValueContributions(),
                      directCrsContext.numCrsValueContributions(), 1.0);
+                  cudss.addScaledDiagonal3DeviceValues (
+                     directCrsContext.getScaledDiagonal3ContributionSlots(),
+                     directCrsContext.getScaledDiagonal3Contributions(),
+                     directCrsContext.numScaledDiagonal3Contributions(), 1.0);
                   cudss.factorDeviceValues();
                }
                else {
@@ -2580,7 +2584,10 @@ public class MechSystemSolver {
                       S, velSize, myGT, myRg, null, null,
                       kktMDeviceContext.getCrsValueContributionSlots(),
                       kktMDeviceContext.getCrsValueContributions(),
-                      kktMDeviceContext.numCrsValueContributions())) {
+                      kktMDeviceContext.numCrsValueContributions(),
+                      kktMDeviceContext.getScaledDiagonal3ContributionSlots(),
+                      kktMDeviceContext.getScaledDiagonal3Contributions(),
+                      kktMDeviceContext.numScaledDiagonal3Contributions())) {
                   myKKTSolver.solve (vel, myLam, bf, myBg);
                }
                else {
@@ -2609,7 +2616,10 @@ public class MechSystemSolver {
                       S, velSize, myGT, myRg, myNT, myRn,
                       kktMDeviceContext.getCrsValueContributionSlots(),
                       kktMDeviceContext.getCrsValueContributions(),
-                      kktMDeviceContext.numCrsValueContributions())) {
+                      kktMDeviceContext.numCrsValueContributions(),
+                      kktMDeviceContext.getScaledDiagonal3ContributionSlots(),
+                      kktMDeviceContext.getScaledDiagonal3Contributions(),
+                      kktMDeviceContext.numScaledDiagonal3Contributions())) {
                   myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
                }
                maybeReportGpuAssemblyStatus (

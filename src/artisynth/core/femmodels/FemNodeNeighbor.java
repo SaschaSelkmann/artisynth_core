@@ -284,9 +284,10 @@ public class FemNodeNeighbor {
       if (!slotMap.hasBlockSlots (blkNum)) {
          return;
       }
-      addCrsValueContribution (context, slotMap, blkNum, 0, 0, d);
-      addCrsValueContribution (context, slotMap, blkNum, 1, 1, d);
-      addCrsValueContribution (context, slotMap, blkNum, 2, 2, d);
+      context.addScaledDiagonal3CrsValueContribution (
+         slotMap.getBlockValueSlot (blkNum, 0, 0),
+         slotMap.getBlockValueSlot (blkNum, 1, 1),
+         slotMap.getBlockValueSlot (blkNum, 2, 2), d);
    }
 
    public void addVelJacobian (

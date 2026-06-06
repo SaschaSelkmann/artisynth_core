@@ -32,6 +32,9 @@ extern "C" void zeroValues_launch (
 extern "C" void scatterAddValues_launch (
    int nvals, const int* slots, const double* addVals,
    double scale, double* crsVals, cudaStream_t stream);
+extern "C" void addScaledDiagonal3_launch (
+   int nblocks, const int* diagSlots, const double* masses,
+   double scale, double* crsVals, cudaStream_t stream);
 
 void CuDssBridge::setTimingEnabled (bool on) {
    g_timing = on;
@@ -469,6 +472,58 @@ int CuDssBridge::addDeviceValues (
    cudaFree (addValsD);
    if (!cudaOk (launchErr)) {
       myLastErr = "scatterAddValues kernel launch failed";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   myItDiagDirty = true;
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
+int CuDssBridge::addScaledDiagonal3DeviceValues (
+   const int* diagSlots, const double* masses, int nblocks, double scale) {
+
+   if (!myHasPattern || !myValsD) {
+      myLastErr = "addScaledDiagonal3DeviceValues called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nblocks < 0) {
+      myLastErr =
+         "addScaledDiagonal3DeviceValues received a negative block count";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nblocks == 0) {
+      myLastErr = nullptr;
+      return CUDSS_BRIDGE_OK;
+   }
+
+   int* diagSlotsD = nullptr;
+   double* massesD = nullptr;
+   const size_t slotBytes = (size_t)nblocks * 3 * sizeof(int);
+   const size_t massBytes = (size_t)nblocks * sizeof(double);
+   if (!cudaOk (cudaMalloc (&diagSlotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&massesD, massBytes))) {
+      if (diagSlotsD) cudaFree (diagSlotsD);
+      if (massesD) cudaFree (massesD);
+      myLastErr = "cudaMalloc failed in addScaledDiagonal3DeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_ALLOC;
+   }
+   if (!cudaOk (cudaMemcpyAsync (
+          diagSlotsD, diagSlots, slotBytes, cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          massesD, masses, massBytes, cudaMemcpyHostToDevice, myStream))) {
+      cudaFree (diagSlotsD);
+      cudaFree (massesD);
+      myLastErr =
+         "cudaMemcpyAsync failed in addScaledDiagonal3DeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   addScaledDiagonal3_launch (
+      nblocks, diagSlotsD, massesD, scale, myValsD, myStream);
+   cudaError_t launchErr = cudaGetLastError();
+   cudaFree (diagSlotsD);
+   cudaFree (massesD);
+   if (!cudaOk (launchErr)) {
+      myLastErr = "addScaledDiagonal3 kernel launch failed";
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    myItDiagDirty = true;

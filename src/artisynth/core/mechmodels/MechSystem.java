@@ -37,6 +37,9 @@ public interface MechSystem {
       private int[] myCrsValueSlots;
       private double[] myCrsValueContributions;
       private int myNumCrsValueContributions;
+      private int[] myScaledDiagonal3Slots;
+      private double[] myScaledDiagonal3Values;
+      private int myNumScaledDiagonal3Contributions;
       private int myStructureVersion;
 
       public GpuAssemblyContext (
@@ -56,6 +59,9 @@ public interface MechSystem {
          myCrsValueSlots = new int[0];
          myCrsValueContributions = new double[0];
          myNumCrsValueContributions = 0;
+         myScaledDiagonal3Slots = new int[0];
+         myScaledDiagonal3Values = new double[0];
+         myNumScaledDiagonal3Contributions = 0;
       }
 
       public SparseNumberedBlockMatrix getMatrix() {
@@ -76,6 +82,7 @@ public interface MechSystem {
 
       public void clearCrsValueContributions() {
          myNumCrsValueContributions = 0;
+         myNumScaledDiagonal3Contributions = 0;
       }
 
       public void addCrsValueContribution (int slot, double value) {
@@ -89,12 +96,47 @@ public interface MechSystem {
          myCrsValues[slot] += value;
       }
 
+      public void addScaledDiagonal3CrsValueContribution (
+         int slot0, int slot1, int slot2, double value) {
+         if (value == 0) {
+            return;
+         }
+         ensureScaledDiagonal3ContributionCapacity (
+            myNumScaledDiagonal3Contributions+1);
+         int idx = 3*myNumScaledDiagonal3Contributions;
+         myScaledDiagonal3Slots[idx] = slot0;
+         myScaledDiagonal3Slots[idx+1] = slot1;
+         myScaledDiagonal3Slots[idx+2] = slot2;
+         myScaledDiagonal3Values[myNumScaledDiagonal3Contributions] = value;
+         myNumScaledDiagonal3Contributions++;
+         if (slot0 >= 0) {
+            myCrsValues[slot0] += value;
+         }
+         if (slot1 >= 0) {
+            myCrsValues[slot1] += value;
+         }
+         if (slot2 >= 0) {
+            myCrsValues[slot2] += value;
+         }
+      }
+
       private void ensureCrsValueContributionCapacity (int cap) {
          if (myCrsValueSlots.length < cap) {
             int newCap = Math.max (cap, Math.max (64, 2*myCrsValueSlots.length));
             myCrsValueSlots = Arrays.copyOf (myCrsValueSlots, newCap);
             myCrsValueContributions =
                Arrays.copyOf (myCrsValueContributions, newCap);
+         }
+      }
+
+      private void ensureScaledDiagonal3ContributionCapacity (int cap) {
+         if (myScaledDiagonal3Values.length < cap) {
+            int newCap =
+               Math.max (cap, Math.max (64, 2*myScaledDiagonal3Values.length));
+            myScaledDiagonal3Slots =
+               Arrays.copyOf (myScaledDiagonal3Slots, 3*newCap);
+            myScaledDiagonal3Values =
+               Arrays.copyOf (myScaledDiagonal3Values, newCap);
          }
       }
 
@@ -108,6 +150,18 @@ public interface MechSystem {
 
       public double[] getCrsValueContributions() {
          return myCrsValueContributions;
+      }
+
+      public int numScaledDiagonal3Contributions() {
+         return myNumScaledDiagonal3Contributions;
+      }
+
+      public int[] getScaledDiagonal3ContributionSlots() {
+         return myScaledDiagonal3Slots;
+      }
+
+      public double[] getScaledDiagonal3Contributions() {
+         return myScaledDiagonal3Values;
       }
 
       /**

@@ -92,6 +92,9 @@ public class CuDssSolver implements DirectSolver {
    private static native int    doClearDeviceValues (long handle);
    private static native int    doAddDeviceValues (
       long handle, int[] slots, double[] vals, int nvals, double scale);
+   private static native int    doAddScaledDiagonal3DeviceValues (
+      long handle, int[] diagSlots, double[] masses, int nblocks,
+      double scale);
    private static native int    doFactorDeviceValues (long handle);
    private static native int    doSolve   (long handle, double[] b, double[] x);
    private static native int    doSolveMulti (
@@ -413,6 +416,34 @@ public class CuDssSolver implements DirectSolver {
       check (
          doAddDeviceValues (myHandle, slots, vals, nvals, scale),
          "addDeviceValues");
+   }
+
+   /**
+    * Adds lumped 3-DOF diagonal block contributions into the native
+    * device-side CRS value buffer:
+    * <pre>
+    *   for each block i and dof k:
+    *      deviceCrsValues[diagSlots[3*i+k]] += scale * masses[i]
+    * </pre>
+    *
+    * <p>Slots are 0-based positions in the CRS value array for the currently
+    * analyzed sparsity pattern. Negative slots are ignored by the CUDA
+    * kernel, allowing callers to pass partially-filtered contribution maps.
+    */
+   public synchronized void addScaledDiagonal3DeviceValues (
+      int[] diagSlots, double[] masses, int nblocks, double scale) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      if (nblocks < 0 || nblocks > diagSlots.length/3 ||
+          nblocks > masses.length) {
+         throw new IllegalArgumentException (
+            "nblocks exceeds diagonal-slot/mass array length");
+      }
+      check (
+         doAddScaledDiagonal3DeviceValues (
+            myHandle, diagSlots, masses, nblocks, scale),
+         "addScaledDiagonal3DeviceValues");
    }
 
    /**

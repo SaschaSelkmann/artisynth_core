@@ -90,3 +90,39 @@ extern "C" void scatterAddValues_launch (
    scatterAddValuesKernel<<<blocks, threads, 0, stream>>>(
       nvals, slots, addVals, scale, crsVals);
 }
+
+// For each 3-DOF block i, add scale*masses[i] to the three diagonal CRS
+// slots. A slot value < 0 is ignored, allowing callers to pass filtered maps.
+__global__ static void addScaledDiagonal3Kernel (
+   int nblocks,
+   const int*    __restrict__ diagSlots,
+   const double* __restrict__ masses,
+   double scale,
+   double*       __restrict__ crsVals) {
+   int i = blockIdx.x * blockDim.x + threadIdx.x;
+   if (i < nblocks) {
+      double v = scale * masses[i];
+      int base = 3 * i;
+      int s0 = diagSlots[base];
+      int s1 = diagSlots[base + 1];
+      int s2 = diagSlots[base + 2];
+      if (s0 >= 0) {
+         atomicAdd (&crsVals[s0], v);
+      }
+      if (s1 >= 0) {
+         atomicAdd (&crsVals[s1], v);
+      }
+      if (s2 >= 0) {
+         atomicAdd (&crsVals[s2], v);
+      }
+   }
+}
+
+extern "C" void addScaledDiagonal3_launch (
+   int nblocks, const int* diagSlots, const double* masses,
+   double scale, double* crsVals, cudaStream_t stream) {
+   const int threads = 256;
+   const int blocks  = (nblocks + threads - 1) / threads;
+   addScaledDiagonal3Kernel<<<blocks, threads, 0, stream>>>(
+      nblocks, diagSlots, masses, scale, crsVals);
+}
