@@ -126,3 +126,35 @@ extern "C" void addScaledDiagonal3_launch (
    addScaledDiagonal3Kernel<<<blocks, threads, 0, stream>>>(
       nblocks, diagSlots, masses, scale, crsVals);
 }
+
+// For each 3x3 block i, add globalScale*blockScales[i]*blockVals[9*i+j]
+// to crsVals[blockSlots[9*i+j]]. A slot value < 0 is ignored.
+__global__ static void addScaledBlock3Kernel (
+   int nblocks,
+   const int*    __restrict__ blockSlots,
+   const double* __restrict__ blockVals,
+   const double* __restrict__ blockScales,
+   double globalScale,
+   double*       __restrict__ crsVals) {
+   int i = blockIdx.x * blockDim.x + threadIdx.x;
+   if (i < nblocks) {
+      int base = 9 * i;
+      double s = globalScale * blockScales[i];
+      for (int j = 0; j < 9; j++) {
+         int slot = blockSlots[base + j];
+         if (slot >= 0) {
+            atomicAdd (&crsVals[slot], s * blockVals[base + j]);
+         }
+      }
+   }
+}
+
+extern "C" void addScaledBlock3_launch (
+   int nblocks, const int* blockSlots, const double* blockVals,
+   const double* blockScales, double globalScale, double* crsVals,
+   cudaStream_t stream) {
+   const int threads = 256;
+   const int blocks  = (nblocks + threads - 1) / threads;
+   addScaledBlock3Kernel<<<blocks, threads, 0, stream>>>(
+      nblocks, blockSlots, blockVals, blockScales, globalScale, crsVals);
+}

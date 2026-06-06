@@ -620,14 +620,16 @@ public class KKTSolver {
 
       return factorDeviceMContributions (
          M, sizeM, GT, Rg, NT, Rn, mSlots, mVals, numMVals,
-         null, null, 0);
+         null, null, 0, null, null, null, 0);
    }
 
    public boolean factorDeviceMContributions (
       SparseBlockMatrix M, int sizeM, SparseBlockMatrix GT, VectorNd Rg,
       SparseBlockMatrix NT, VectorNd Rn,
       int[] mSlots, double[] mVals, int numMVals,
-      int[] diag3Slots, double[] diag3Vals, int numDiag3Vals) {
+      int[] diag3Slots, double[] diag3Vals, int numDiag3Vals,
+      int[] block3Slots, double[] block3Vals, double[] block3Scales,
+      int numBlock3Vals) {
 
       if (!canFactorDeviceMContributions()) {
          return false;
@@ -636,7 +638,8 @@ public class KKTSolver {
       checkMGStructure (M, sizeM, GT);
       factorMGDeviceMContributions (
          M, sizeM, GT, Rg, mSlots, mVals, numMVals,
-         diag3Slots, diag3Vals, numDiag3Vals);
+         diag3Slots, diag3Vals, numDiag3Vals,
+         block3Slots, block3Vals, block3Scales, numBlock3Vals);
 
       if (NT != null && NT.colSize() != 0) {
          if ((myTypeM & Matrix.SYMMETRIC) == 0) {
@@ -1929,7 +1932,9 @@ public class KKTSolver {
    private void factorMGDeviceMContributions (
       Object M, int sizeM, SparseBlockMatrix GT, VectorNd Rg,
       int[] mSlots, double[] mVals, int numMVals,
-      int[] diag3Slots, double[] diag3Vals, int numDiag3Vals) {
+      int[] diag3Slots, double[] diag3Vals, int numDiag3Vals,
+      int[] block3Slots, double[] block3Vals, double[] block3Scales,
+      int numBlock3Vals) {
 
       if (myCuDss == null) {
          throw new ImproperStateException (
@@ -1943,6 +1948,10 @@ public class KKTSolver {
       if (numDiag3Vals > 0) {
          myCuDss.addScaledDiagonal3DeviceValues (
             diag3Slots, diag3Vals, numDiag3Vals, 1.0);
+      }
+      if (numBlock3Vals > 0) {
+         myCuDss.addScaledBlock3DeviceValues (
+            block3Slots, block3Vals, block3Scales, numBlock3Vals, 1.0);
       }
       myCuDss.factorDeviceValues();
       myLastFactorUsedDeviceValues = true;

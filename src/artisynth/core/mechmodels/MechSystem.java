@@ -40,6 +40,10 @@ public interface MechSystem {
       private int[] myScaledDiagonal3Slots;
       private double[] myScaledDiagonal3Values;
       private int myNumScaledDiagonal3Contributions;
+      private int[] myScaledBlock3Slots;
+      private double[] myScaledBlock3Values;
+      private double[] myScaledBlock3Scales;
+      private int myNumScaledBlock3Contributions;
       private int myStructureVersion;
 
       public GpuAssemblyContext (
@@ -62,6 +66,10 @@ public interface MechSystem {
          myScaledDiagonal3Slots = new int[0];
          myScaledDiagonal3Values = new double[0];
          myNumScaledDiagonal3Contributions = 0;
+         myScaledBlock3Slots = new int[0];
+         myScaledBlock3Values = new double[0];
+         myScaledBlock3Scales = new double[0];
+         myNumScaledBlock3Contributions = 0;
       }
 
       public SparseNumberedBlockMatrix getMatrix() {
@@ -83,6 +91,7 @@ public interface MechSystem {
       public void clearCrsValueContributions() {
          myNumCrsValueContributions = 0;
          myNumScaledDiagonal3Contributions = 0;
+         myNumScaledBlock3Contributions = 0;
       }
 
       public void addCrsValueContribution (int slot, double value) {
@@ -120,6 +129,57 @@ public interface MechSystem {
          }
       }
 
+      public void addScaledBlock3CrsValueContribution (
+         int blkNum, double scale, Matrix3d K) {
+
+         if (blkNum == -1 || K == null || scale == 0) {
+            return;
+         }
+         if (!mySlotMap.hasBlockSlots (blkNum)) {
+            return;
+         }
+         ensureScaledBlock3ContributionCapacity (
+            myNumScaledBlock3Contributions+1);
+         int slotIdx = 9*myNumScaledBlock3Contributions;
+         int valIdx = slotIdx;
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 0, 0);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 0, 1);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 0, 2);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 1, 0);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 1, 1);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 1, 2);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 2, 0);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 2, 1);
+         myScaledBlock3Slots[slotIdx++] =
+            mySlotMap.getBlockValueSlot (blkNum, 2, 2);
+         myScaledBlock3Values[valIdx++] = K.m00;
+         myScaledBlock3Values[valIdx++] = K.m01;
+         myScaledBlock3Values[valIdx++] = K.m02;
+         myScaledBlock3Values[valIdx++] = K.m10;
+         myScaledBlock3Values[valIdx++] = K.m11;
+         myScaledBlock3Values[valIdx++] = K.m12;
+         myScaledBlock3Values[valIdx++] = K.m20;
+         myScaledBlock3Values[valIdx++] = K.m21;
+         myScaledBlock3Values[valIdx++] = K.m22;
+         myScaledBlock3Scales[myNumScaledBlock3Contributions] = scale;
+         int base = 9*myNumScaledBlock3Contributions;
+         for (int i=0; i<9; i++) {
+            int slot = myScaledBlock3Slots[base+i];
+            if (slot >= 0) {
+               myCrsValues[slot] += scale*myScaledBlock3Values[base+i];
+            }
+         }
+         myNumScaledBlock3Contributions++;
+      }
+
       private void ensureCrsValueContributionCapacity (int cap) {
          if (myCrsValueSlots.length < cap) {
             int newCap = Math.max (cap, Math.max (64, 2*myCrsValueSlots.length));
@@ -137,6 +197,19 @@ public interface MechSystem {
                Arrays.copyOf (myScaledDiagonal3Slots, 3*newCap);
             myScaledDiagonal3Values =
                Arrays.copyOf (myScaledDiagonal3Values, newCap);
+         }
+      }
+
+      private void ensureScaledBlock3ContributionCapacity (int cap) {
+         if (myScaledBlock3Scales.length < cap) {
+            int newCap =
+               Math.max (cap, Math.max (64, 2*myScaledBlock3Scales.length));
+            myScaledBlock3Slots =
+               Arrays.copyOf (myScaledBlock3Slots, 9*newCap);
+            myScaledBlock3Values =
+               Arrays.copyOf (myScaledBlock3Values, 9*newCap);
+            myScaledBlock3Scales =
+               Arrays.copyOf (myScaledBlock3Scales, newCap);
          }
       }
 
@@ -162,6 +235,22 @@ public interface MechSystem {
 
       public double[] getScaledDiagonal3Contributions() {
          return myScaledDiagonal3Values;
+      }
+
+      public int numScaledBlock3Contributions() {
+         return myNumScaledBlock3Contributions;
+      }
+
+      public int[] getScaledBlock3ContributionSlots() {
+         return myScaledBlock3Slots;
+      }
+
+      public double[] getScaledBlock3Contributions() {
+         return myScaledBlock3Values;
+      }
+
+      public double[] getScaledBlock3ContributionScales() {
+         return myScaledBlock3Scales;
       }
 
       /**

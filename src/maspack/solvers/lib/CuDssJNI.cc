@@ -114,6 +114,39 @@ Java_maspack_solvers_CuDssSolver_doAddScaledDiagonal3DeviceValues
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL
+Java_maspack_solvers_CuDssSolver_doAddScaledBlock3DeviceValues
+  (JNIEnv* env, jclass /*cls*/, jlong handle,
+   jintArray blockSlots, jdoubleArray blockVals, jdoubleArray blockScales,
+   jint nblocks, jdouble scale) {
+   CuDssBridge* b = asBridge (handle);
+   if (!b) return CUDSS_BRIDGE_ERR_STATE;
+   jint* blockSlotsP = env->GetIntArrayElements (blockSlots, nullptr);
+   jdouble* blockValsP = env->GetDoubleArrayElements (blockVals, nullptr);
+   jdouble* blockScalesP =
+      env->GetDoubleArrayElements (blockScales, nullptr);
+   if (!blockSlotsP || !blockValsP || !blockScalesP) {
+      if (blockSlotsP) {
+         env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+      }
+      if (blockValsP) {
+         env->ReleaseDoubleArrayElements (blockVals, blockValsP, JNI_ABORT);
+      }
+      if (blockScalesP) {
+         env->ReleaseDoubleArrayElements (
+            blockScales, blockScalesP, JNI_ABORT);
+      }
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = b->addScaledBlock3DeviceValues (
+      (const int*)blockSlotsP, (const double*)blockValsP,
+      (const double*)blockScalesP, (int)nblocks, (double)scale);
+   env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (blockVals, blockValsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (blockScales, blockScalesP, JNI_ABORT);
+   return (jint)status;
+}
+
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doFactorDeviceValues
   (JNIEnv* /*env*/, jclass /*cls*/, jlong handle) {
    CuDssBridge* b = asBridge (handle);

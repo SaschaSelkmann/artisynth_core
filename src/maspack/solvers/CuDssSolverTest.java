@@ -424,6 +424,44 @@ public class CuDssSolverTest extends UnitTest {
       finally { s.dispose(); }
    }
 
+   private void testScaledBlock3DeviceContribution() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         double[] zeroVals = { 0, 0, 0, 0, 0, 0, 0 };
+         int[] cols = { 0, 1, 0, 1, 2, 1, 2 };
+         int[] rows = { 0, 2, 5, 7 };
+         s.analyze (zeroVals, cols, rows, 3, Matrix.INDEFINITE);
+
+         int[] blockSlots = {
+            0, 1, -1,
+            2, 3,  4,
+           -1, 5,  6
+         };
+         double[] blockVals = {
+            4, 1, 0,
+            1, 3, 1,
+            0, 1, 2
+         };
+         double[] blockScales = { 0.5 };
+         s.clearDeviceValues();
+         s.addScaledBlock3DeviceValues (
+            blockSlots, blockVals, blockScales, 1, 2.0);
+         s.factorDeviceValues();
+
+         double[] x = new double[3];
+         s.solve (x, new double[] { 6, 10, 8 });
+         for (int i=0; i<3; i++) {
+            double expected = i + 1;
+            if (Math.abs (x[i] - expected) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "scaled block3 device contribution x[" + i + "]=" +
+                  x[i] + " expected " + expected);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
    // Refactor with same pattern via array entry points.
    private void testArrayCsrRefactor() {
       CuDssSolver s = new CuDssSolver();
@@ -636,6 +674,7 @@ public class CuDssSolverTest extends UnitTest {
       testArrayCsrSpdRoundtrip();
       testDeviceValueAssembly();
       testScaledDiagonal3DeviceContribution();
+      testScaledBlock3DeviceContribution();
       testArrayCsrRefactor();
       testMultiRhsConsistency();
       testMultiRhsGrowShrink();

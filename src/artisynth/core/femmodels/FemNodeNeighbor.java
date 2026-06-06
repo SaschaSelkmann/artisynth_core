@@ -228,34 +228,7 @@ public class FemNodeNeighbor {
       MechSystem.GpuAssemblyContext context, int blkNum, double s,
       Matrix3d K) {
 
-      if (blkNum == -1 || K == null || s == 0) {
-         return;
-      }
-      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
-         context.getSlotMap();
-      if (!slotMap.hasBlockSlots (blkNum)) {
-         return;
-      }
-      addCrsValueContribution (context, slotMap, blkNum, 0, 0, s*K.m00);
-      addCrsValueContribution (context, slotMap, blkNum, 0, 1, s*K.m01);
-      addCrsValueContribution (context, slotMap, blkNum, 0, 2, s*K.m02);
-      addCrsValueContribution (context, slotMap, blkNum, 1, 0, s*K.m10);
-      addCrsValueContribution (context, slotMap, blkNum, 1, 1, s*K.m11);
-      addCrsValueContribution (context, slotMap, blkNum, 1, 2, s*K.m12);
-      addCrsValueContribution (context, slotMap, blkNum, 2, 0, s*K.m20);
-      addCrsValueContribution (context, slotMap, blkNum, 2, 1, s*K.m21);
-      addCrsValueContribution (context, slotMap, blkNum, 2, 2, s*K.m22);
-   }
-
-   private static void addCrsValueContribution (
-      MechSystem.GpuAssemblyContext context,
-      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
-      int blkNum, int i, int j, double value) {
-
-      int slot = slotMap.getBlockValueSlot (blkNum, i, j);
-      if (slot != -1) {
-         context.addCrsValueContribution (slot, value);
-      }
+      context.addScaledBlock3CrsValueContribution (blkNum, s, K);
    }
 
    private static void addMassDampingToCrs (

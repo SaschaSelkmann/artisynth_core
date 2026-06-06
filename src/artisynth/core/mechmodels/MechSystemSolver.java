@@ -1845,6 +1845,11 @@ public class MechSystemSolver {
                      directCrsContext.getScaledDiagonal3ContributionSlots(),
                      directCrsContext.getScaledDiagonal3Contributions(),
                      directCrsContext.numScaledDiagonal3Contributions(), 1.0);
+                  cudss.addScaledBlock3DeviceValues (
+                     directCrsContext.getScaledBlock3ContributionSlots(),
+                     directCrsContext.getScaledBlock3Contributions(),
+                     directCrsContext.getScaledBlock3ContributionScales(),
+                     directCrsContext.numScaledBlock3Contributions(), 1.0);
                   cudss.factorDeviceValues();
                }
                else {
@@ -2587,7 +2592,11 @@ public class MechSystemSolver {
                       kktMDeviceContext.numCrsValueContributions(),
                       kktMDeviceContext.getScaledDiagonal3ContributionSlots(),
                       kktMDeviceContext.getScaledDiagonal3Contributions(),
-                      kktMDeviceContext.numScaledDiagonal3Contributions())) {
+                      kktMDeviceContext.numScaledDiagonal3Contributions(),
+                      kktMDeviceContext.getScaledBlock3ContributionSlots(),
+                      kktMDeviceContext.getScaledBlock3Contributions(),
+                      kktMDeviceContext.getScaledBlock3ContributionScales(),
+                      kktMDeviceContext.numScaledBlock3Contributions())) {
                   myKKTSolver.solve (vel, myLam, bf, myBg);
                }
                else {
@@ -2619,7 +2628,11 @@ public class MechSystemSolver {
                       kktMDeviceContext.numCrsValueContributions(),
                       kktMDeviceContext.getScaledDiagonal3ContributionSlots(),
                       kktMDeviceContext.getScaledDiagonal3Contributions(),
-                      kktMDeviceContext.numScaledDiagonal3Contributions())) {
+                      kktMDeviceContext.numScaledDiagonal3Contributions(),
+                      kktMDeviceContext.getScaledBlock3ContributionSlots(),
+                      kktMDeviceContext.getScaledBlock3Contributions(),
+                      kktMDeviceContext.getScaledBlock3ContributionScales(),
+                      kktMDeviceContext.numScaledBlock3Contributions())) {
                   myKKTSolver.factor (S, velSize, myGT, myRg, myNT, myRn);
                }
                maybeReportGpuAssemblyStatus (

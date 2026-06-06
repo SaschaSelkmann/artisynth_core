@@ -90,6 +90,9 @@ public:
       const int* slots, const double* addVals, int nvals, double scale);
    int addScaledDiagonal3DeviceValues (
       const int* diagSlots, const double* masses, int nblocks, double scale);
+   int addScaledBlock3DeviceValues (
+      const int* blockSlots, const double* blockVals,
+      const double* blockScales, int nblocks, double scale);
    int factorDeviceValues();
 
    // Copy b[] H->D, run CUDSS_PHASE_SOLVE, copy x[] D->H. Both arrays length n.
