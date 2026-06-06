@@ -87,6 +87,8 @@ public class MechSystemSolver {
       Boolean.getBoolean ("artisynth.gpuAssembly.verifyCrs");
    private static final boolean enableGpuAssemblyDirectCrsProperty =
       Boolean.getBoolean ("artisynth.gpuAssembly.directCrs");
+   private static boolean myGpuAssemblyRequireFull =
+      Boolean.getBoolean ("artisynth.gpuAssembly.requireFull");
    public boolean printChecksums = false;
    public boolean printPosChecksum = false;
    public boolean printVelChecksum = false;
@@ -1133,6 +1135,14 @@ public class MechSystemSolver {
       myGpuAssemblyStatusEnabled = enable;
    }
 
+   public static boolean getGpuAssemblyRequireFull() {
+      return myGpuAssemblyRequireFull;
+   }
+
+   public static void setGpuAssemblyRequireFull (boolean enable) {
+      myGpuAssemblyRequireFull = enable;
+   }
+
    private String profileName() {
       String name = null;
       if (mySys instanceof ModelComponent) {
@@ -1236,6 +1246,49 @@ public class MechSystemSolver {
       if (!status.equals (myLastGpuAssemblyStatus)) {
          System.out.println (status);
          myLastGpuAssemblyStatus = status;
+      }
+   }
+
+   private void maybeReportGpuAssemblyStatus (
+      String phase, boolean directCrs, boolean deviceCrs,
+      String directCrsStatus, int size,
+      MechSystem.GpuAssemblyContext context) {
+
+      if (context == null) {
+         maybeReportGpuAssemblyStatus (
+            phase, directCrs, deviceCrs, directCrsStatus, size);
+         return;
+      }
+      if (!myGpuAssemblyStatusEnabled || !enableGpuAssemblyDirectCrs()) {
+         return;
+      }
+      String source = context.hasCpuGeneratedMatrixContributions() ?
+         "cpuGeneratedValuesToDeviceCrs" : "deviceGeneratedValues";
+      String status = String.format (
+         "[gpu-assembly-status] solver=%s phase=%s integrator=%s "+
+         "matrixSolver=%s directCrs=%b deviceCrs=%b "+
+         "directCrsStatus=%s size=%d valueSource=%s contributions={%s}",
+         profileName(), phase, myIntegrator, myMatrixSolver, directCrs,
+         deviceCrs, directCrsStatus, size, source,
+         context.getContributionSummary());
+      if (!status.equals (myLastGpuAssemblyStatus)) {
+         System.out.println (status);
+         myLastGpuAssemblyStatus = status;
+      }
+   }
+
+   private void requireFullGpuAssembly (
+      String phase, MechSystem.GpuAssemblyContext context) {
+
+      if (myGpuAssemblyRequireFull &&
+          context != null &&
+          context.hasCpuGeneratedMatrixContributions()) {
+         throw new UnsupportedOperationException (
+            "Full GPU assembly requested for "+phase+
+            ", but FEM matrix contributions are still generated on the CPU "+
+            "before being applied to cuDSS device CRS values ("+
+            context.getContributionSummary()+"). A material/element CUDA "+
+            "kernel is still required for this model.");
       }
    }
 
@@ -1790,7 +1843,7 @@ public class MechSystemSolver {
             crsVerified, vsize, directCrsContext);
       maybeReportGpuAssemblyStatus (
          "backwardEuler", useDirectCrs, directCrsDeviceValuesReady,
-         directCrsStatus, vsize);
+         directCrsStatus, vsize, useDirectCrs ? directCrsContext : null);
       long tAnalyze = tMass;
       if (mySolveMatrixVersion != myRegSolveMatrixVersion) {
          analyze = true;
@@ -1835,6 +1888,8 @@ public class MechSystemSolver {
          if (myUseDirectSolver) {
             if (useDirectCrs) {
                if (directCrsDeviceValuesReady) {
+                  requireFullGpuAssembly (
+                     "backwardEuler", directCrsContext);
                   CuDssSolver cudss = (CuDssSolver)myDirectSolver;
                   cudss.clearDeviceValues();
                   cudss.addDeviceValues (
@@ -2584,6 +2639,8 @@ public class MechSystemSolver {
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStart (myKKTTimer);
                }
+               requireFullGpuAssembly (
+                  "kktFactor", kktMDeviceContext);
                if (kktMDeviceContext != null &&
                    myKKTSolver.factorDeviceMContributions (
                       S, velSize, myGT, myRg, null, null,
@@ -2611,7 +2668,9 @@ public class MechSystemSolver {
                      (kktMDeviceContext != null ?
                         "kktDeviceMContributions" : "kktDeviceValues") :
                      "kktHostValues",
-                  velSize + myGsize);
+                  velSize + myGsize,
+                  myKKTSolver.lastFactorUsedDeviceValues() ?
+                     kktMDeviceContext : null);
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStop ("    KKT solve: factorAndSolve(hybrid)", myKKTTimer);
                }
@@ -2620,6 +2679,8 @@ public class MechSystemSolver {
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStart (myKKTTimer);
                }
+               requireFullGpuAssembly (
+                  "kktFactor", kktMDeviceContext);
                if (kktMDeviceContext == null ||
                    !myKKTSolver.factorDeviceMContributions (
                       S, velSize, myGT, myRg, myNT, myRn,
@@ -2642,7 +2703,9 @@ public class MechSystemSolver {
                      (kktMDeviceContext != null ?
                         "kktDeviceMContributions" : "kktDeviceValues") :
                      "kktHostValues",
-                  velSize + myGsize);
+                  velSize + myGsize,
+                  myKKTSolver.lastFactorUsedDeviceValues() ?
+                     kktMDeviceContext : null);
                myKKTSolver.solve (vel, myLam, myThe, bf, myBg, myBn);
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStop ("    KKT solve: factor and solve", myKKTTimer);

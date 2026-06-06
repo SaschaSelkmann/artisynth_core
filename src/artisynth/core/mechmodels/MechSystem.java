@@ -253,6 +253,20 @@ public interface MechSystem {
          return myScaledBlock3Scales;
       }
 
+      public boolean hasCpuGeneratedMatrixContributions() {
+         return (myNumCrsValueContributions > 0 ||
+                 myNumScaledDiagonal3Contributions > 0 ||
+                 myNumScaledBlock3Contributions > 0);
+      }
+
+      public String getContributionSummary() {
+         return String.format (
+            "generic=%d diag3=%d block3=%d",
+            myNumCrsValueContributions,
+            myNumScaledDiagonal3Contributions,
+            myNumScaledBlock3Contributions);
+      }
+
       /**
        * Returns 1-based CRS column indices, matching the public maspack CRS
        * export convention.

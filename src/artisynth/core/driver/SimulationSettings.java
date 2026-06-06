@@ -225,6 +225,14 @@ public class SimulationSettings extends SettingsBase {
       KKTSolver.setKktDeviceValuesEnabled (enable);
    }
 
+   public boolean getGpuAssemblyRequireFull () {
+      return MechSystemSolver.getGpuAssemblyRequireFull();
+   }
+
+   public void setGpuAssemblyRequireFull (boolean enable) {
+      MechSystemSolver.setGpuAssemblyRequireFull (enable);
+   }
+
    public boolean getCuDssTiming () {
       return CuDssSolver.getTimingEnabled();
    }

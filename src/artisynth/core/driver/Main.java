@@ -1744,6 +1744,10 @@ public class Main implements DriverInterface, ComponentChangeListener {
       mySimulationSettings.setGpuAssemblyKktDeviceValues (
          kktDeviceValuesEnabled);
 
+      if (gpuAssemblyRequireFull.value) {
+         MechSystemSolver.setGpuAssemblyRequireFull (true);
+      }
+
       boolean timingEnabled = mySimulationPrefs.getCuDssTiming();
       if (cuDssTiming.value) {
          timingEnabled = true;
@@ -2747,6 +2751,8 @@ public class Main implements DriverInterface, ComponentChangeListener {
       new BooleanHolder (false);
    protected static BooleanHolder gpuAssemblyKktDeviceValues =
       new BooleanHolder (false);
+   protected static BooleanHolder gpuAssemblyRequireFull =
+      new BooleanHolder (false);
    protected static BooleanHolder cuDssTiming = new BooleanHolder (false);
    protected static StringHolder testModelLoading = new StringHolder();
 
@@ -3006,6 +3012,10 @@ public class Main implements DriverInterface, ComponentChangeListener {
          "-gpuAssemblyKktDeviceValues %v "+
          "#factor cuDSS KKT systems from device CRS values",
          gpuAssemblyKktDeviceValues);
+      parser.addOption (
+         "-gpuAssemblyRequireFull %v "+
+         "#abort if FEM matrix values are still generated on the CPU",
+         gpuAssemblyRequireFull);
       parser.addOption (
          "-cuDssTiming %v #print cuDSS factor/solve timing diagnostics",
          cuDssTiming);
