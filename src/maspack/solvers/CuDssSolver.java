@@ -112,6 +112,12 @@ public class CuDssSolver implements DirectSolver {
       int[] elemIpOffsets, int[] elemGradOffsets, int[] pairNodeIdxs,
       int[] blockSlots, double[] elemParams, double[] grads, double[] dvs,
       int nelems, double scale);
+   private static native int    doAddLinearElasticStiffness3ElementGeometryDeviceValues (
+      long handle, int[] elemNodeCounts, int[] elemNodeOffsets,
+      int[] elemPairOffsets, int[] elemIpOffsets,
+      int[] elemNaturalGradOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      double[] elemParams, double[] elemNodePositions,
+      double[] naturalGrads, double[] ipWeights, int nelems, double scale);
    private static native int    doAddDilationalStiffness3ElementDeviceValues (
       long handle, int[] elemNodeCounts, int[] elemPressureCounts,
       int[] elemPairOffsets, int[] elemConstraintOffsets,
@@ -613,6 +619,51 @@ public class CuDssSolver implements DirectSolver {
             elemGradOffsets, pairNodeIdxs, blockSlots, elemParams, grads,
             dvs, nelems, scale),
          "addLinearElasticStiffness3ElementDeviceValues");
+   }
+
+   /**
+    * Computes and adds compact element-batched isotropic linear elastic
+    * stiffness contributions on the GPU, including per-integration-point
+    * Jacobian, spatial shape-gradient and volume-weight evaluation.
+    */
+   public synchronized void addLinearElasticStiffness3ElementGeometryDeviceValues (
+      int[] elemNodeCounts, int[] elemNodeOffsets, int[] elemPairOffsets,
+      int[] elemIpOffsets, int[] elemNaturalGradOffsets, int[] pairNodeIdxs,
+      int[] blockSlots, double[] elemParams, double[] elemNodePositions,
+      double[] naturalGrads, double[] ipWeights, int nelems, double scale) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      if (nelems < 0 ||
+          nelems > elemNodeCounts.length ||
+          nelems+1 > elemNodeOffsets.length ||
+          nelems+1 > elemPairOffsets.length ||
+          nelems+1 > elemIpOffsets.length ||
+          nelems+1 > elemNaturalGradOffsets.length) {
+         throw new IllegalArgumentException (
+            "nelems exceeds compact linear elastic geometry arrays");
+      }
+      int nnodes = elemNodeOffsets[nelems];
+      int npairs = elemPairOffsets[nelems];
+      int nips = elemIpOffsets[nelems];
+      int ngrads = elemNaturalGradOffsets[nelems];
+      if (nnodes < 0 || npairs < 0 || nips < 0 || ngrads < 0 ||
+          npairs > pairNodeIdxs.length/2 ||
+          npairs > blockSlots.length/9 ||
+          nelems > elemParams.length/2 ||
+          nnodes > elemNodePositions.length/3 ||
+          ngrads > naturalGrads.length/3 ||
+          nips > ipWeights.length) {
+         throw new IllegalArgumentException (
+            "compact linear elastic geometry descriptor arrays are inconsistent");
+      }
+      check (
+         doAddLinearElasticStiffness3ElementGeometryDeviceValues (
+            myHandle, elemNodeCounts, elemNodeOffsets, elemPairOffsets,
+            elemIpOffsets, elemNaturalGradOffsets, pairNodeIdxs, blockSlots,
+            elemParams, elemNodePositions, naturalGrads, ipWeights, nelems,
+            scale),
+         "addLinearElasticStiffness3ElementGeometryDeviceValues");
    }
 
    /**

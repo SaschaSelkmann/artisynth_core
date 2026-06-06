@@ -109,6 +109,13 @@ public:
       const int* pairNodeIdxs, const int* blockSlots,
       const double* elemParams, const double* grads, const double* dvs,
       int nelems, double scale);
+   int addLinearElasticStiffness3ElementGeometryDeviceValues (
+      const int* elemNodeCounts, const int* elemNodeOffsets,
+      const int* elemPairOffsets, const int* elemIpOffsets,
+      const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
+      const int* blockSlots, const double* elemParams,
+      const double* elemNodePositions, const double* naturalGrads,
+      const double* ipWeights, int nelems, double scale);
    int addDilationalStiffness3ElementDeviceValues (
       const int* elemNodeCounts, const int* elemPressureCounts,
       const int* elemPairOffsets, const int* elemConstraintOffsets,

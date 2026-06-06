@@ -165,6 +165,10 @@ public class IntegrationPoint3d {
       GNs[i].set (dNds);
    }
 
+   public Vector3d getShapeGrad (int i) {
+      return GNs[i];
+   }
+
    public void setPressureWeights (VectorNd vals) {
       H.set (vals);
    }

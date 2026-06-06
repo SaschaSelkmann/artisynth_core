@@ -4272,6 +4272,7 @@ PointAttachable, ConnectableBody {
       int nelems = myElements.size();
       int totalPairs = 0;
       int totalIps = 0;
+      int totalElemNodes = 0;
       int totalGradVecs = 0;
       for (FemElement3d e : myElements) {
          int npairs = 0;
@@ -4288,33 +4289,44 @@ PointAttachable, ConnectableBody {
          }
          totalPairs += npairs;
          totalIps += e.getIntegrationPoints().length;
+         totalElemNodes += e.myNodes.length;
          totalGradVecs += e.getIntegrationPoints().length * e.myNodes.length;
       }
 
       int[] elemNodeCounts = new int[nelems];
+      int[] elemNodeOffsets = new int[nelems+1];
       int[] elemPairOffsets = new int[nelems+1];
       int[] elemIpOffsets = new int[nelems+1];
-      int[] elemGradOffsets = new int[nelems+1];
+      int[] elemNaturalGradOffsets = new int[nelems+1];
       int[] pairNodeIdxs = new int[2*totalPairs];
       int[] blockSlots = new int[9*totalPairs];
       double[] elemParams = new double[2*nelems];
-      double[] grads = new double[3*totalGradVecs];
-      double[] dvs = new double[totalIps];
+      double[] elemNodePositions = new double[3*totalElemNodes];
+      double[] naturalGrads = new double[3*totalGradVecs];
+      double[] ipWeights = new double[totalIps];
 
-      FemDeformedPoint dpnt = new FemDeformedPoint();
-      Matrix3d invJ = new Matrix3d();
       int elemIdx = 0;
+      int elemNodeIdx = 0;
       int pairIdx = 0;
       int ipIdx = 0;
       int gradVecIdx = 0;
       for (FemElement3d e : myElements) {
          LinearMaterial mat = (LinearMaterial)getElementMaterial(e);
          elemNodeCounts[elemIdx] = e.myNodes.length;
+         elemNodeOffsets[elemIdx] = elemNodeIdx;
          elemPairOffsets[elemIdx] = pairIdx;
          elemIpOffsets[elemIdx] = ipIdx;
-         elemGradOffsets[elemIdx] = gradVecIdx;
+         elemNaturalGradOffsets[elemIdx] = gradVecIdx;
          elemParams[2*elemIdx] = mat.getYoungsModulus();
          elemParams[2*elemIdx+1] = mat.getPoissonsRatio();
+
+         for (int i=0; i<e.myNodes.length; i++) {
+            Vector3d pos = e.myNodes[i].getLocalPosition();
+            int posBase = 3*elemNodeIdx++;
+            elemNodePositions[posBase++] = pos.x;
+            elemNodePositions[posBase++] = pos.y;
+            elemNodePositions[posBase++] = pos.z;
+         }
 
          for (int i = 0; i < e.myNodes.length; i++) {
             int bi = e.myNodes[i].getLocalSolveIndex();
@@ -4352,31 +4364,28 @@ PointAttachable, ConnectableBody {
          }
 
          IntegrationPoint3d[] ipnts = e.getIntegrationPoints();
-         IntegrationData3d[] idata = e.getIntegrationData();
          for (int k = 0; k < ipnts.length; k++) {
             IntegrationPoint3d pt = ipnts[k];
-            IntegrationData3d dt = idata[k];
-            dpnt.setFromIntegrationPoint (pt, dt, null, e, k);
-            double detJ = invJ.fastInvert (dpnt.getJ());
-            double dv = detJ * pt.getWeight();
-            Vector3d[] GNx = pt.updateShapeGradient (invJ);
             int gradBase = 3*gradVecIdx;
             for (int i=0; i<e.myNodes.length; i++) {
-               grads[gradBase++] = GNx[i].x;
-               grads[gradBase++] = GNx[i].y;
-               grads[gradBase++] = GNx[i].z;
+               Vector3d grad = pt.getShapeGrad(i);
+               naturalGrads[gradBase++] = grad.x;
+               naturalGrads[gradBase++] = grad.y;
+               naturalGrads[gradBase++] = grad.z;
             }
             gradVecIdx += e.myNodes.length;
-            dvs[ipIdx++] = s*dv;
+            ipWeights[ipIdx++] = s*pt.getWeight();
          }
          elemIdx++;
       }
+      elemNodeOffsets[nelems] = elemNodeIdx;
       elemPairOffsets[nelems] = pairIdx;
       elemIpOffsets[nelems] = ipIdx;
-      elemGradOffsets[nelems] = gradVecIdx;
-      context.addLinearElasticStiffness3ElementCrsValueContributions (
-         elemNodeCounts, elemPairOffsets, elemIpOffsets, elemGradOffsets,
-         pairNodeIdxs, blockSlots, elemParams, grads, dvs, nelems);
+      elemNaturalGradOffsets[nelems] = gradVecIdx;
+      context.addLinearElasticStiffness3ElementGeometryCrsValueContributions (
+         elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
+         elemNaturalGradOffsets, pairNodeIdxs, blockSlots, elemParams,
+         elemNodePositions, naturalGrads, ipWeights, nelems);
       return true;
    }
 

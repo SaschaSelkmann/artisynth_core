@@ -666,6 +666,63 @@ public class CuDssSolverTest extends UnitTest {
       finally { s.dispose(); }
    }
 
+   private void testLinearElasticStiffness3ElementGeometryDeviceContribution() {
+      CuDssSolver s = new CuDssSolver();
+      try {
+         double[] zeroVals = { 0, 0, 0 };
+         int[] cols = { 0, 1, 2 };
+         int[] rows = { 0, 1, 2, 3 };
+         s.analyze (zeroVals, cols, rows, 3, Matrix.SPD);
+
+         int[] elemNodeCounts = { 3 };
+         int[] elemNodeOffsets = { 0, 3 };
+         int[] elemPairOffsets = { 0, 3 };
+         int[] elemIpOffsets = { 0, 1 };
+         int[] elemNaturalGradOffsets = { 0, 3 };
+         int[] pairNodeIdxs = {
+            0, 0,
+            1, 1,
+            2, 2
+         };
+         int[] blockSlots = {
+             0, -1, -1,  -1, -1, -1,  -1, -1, -1,
+            -1, -1, -1,  -1,  1, -1,  -1, -1, -1,
+            -1, -1, -1,  -1, -1, -1,  -1, -1,  2
+         };
+         double[] elemParams = { 4, 0 };
+         double[] elemNodePositions = {
+            1, 0, 0,
+            0, 1, 0,
+            0, 0, 1
+         };
+         double[] naturalGrads = {
+            1, 0, 0,
+            0, 1, 0,
+            0, 0, 1
+         };
+         double[] ipWeights = { 1 };
+
+         s.clearDeviceValues();
+         s.addLinearElasticStiffness3ElementGeometryDeviceValues (
+            elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
+            elemNaturalGradOffsets, pairNodeIdxs, blockSlots, elemParams,
+            elemNodePositions, naturalGrads, ipWeights, 1, 1.0);
+         s.factorDeviceValues();
+
+         double[] x = new double[3];
+         s.solve (x, new double[] { 4, 8, 12 });
+         for (int i=0; i<3; i++) {
+            double expected = i + 1;
+            if (Math.abs (x[i] - expected) > RESIDUAL_TOL) {
+               throw new TestException (
+                  "linear elastic stiffness3 geometry device contribution x[" +
+                  i + "]=" + x[i] + " expected " + expected);
+            }
+         }
+      }
+      finally { s.dispose(); }
+   }
+
 
    // Refactor with same pattern via array entry points.
    private void testArrayCsrRefactor() {
@@ -884,6 +941,7 @@ public class CuDssSolverTest extends UnitTest {
       testMaterialStiffness3ElementDeviceContribution();
       testDilationalStiffness3ElementDeviceContribution();
       testLinearElasticStiffness3ElementDeviceContribution();
+      testLinearElasticStiffness3ElementGeometryDeviceContribution();
       testArrayCsrRefactor();
       testMultiRhsConsistency();
       testMultiRhsGrowShrink();

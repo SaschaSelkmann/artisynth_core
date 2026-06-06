@@ -56,6 +56,14 @@ extern "C" void addLinearElasticStiffness3Element_launch (
    const int* pairNodeIdxs, const int* blockSlots,
    const double* elemParams, const double* grads, const double* dvs,
    double globalScale, double* crsVals, cudaStream_t stream);
+extern "C" void addLinearElasticStiffness3ElementGeometry_launch (
+   int nelems, const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPairOffsets, const int* elemIpOffsets,
+   const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const double* elemParams,
+   const double* elemNodePositions, const double* naturalGrads,
+   const double* ipWeights, double globalScale, double* crsVals,
+   cudaStream_t stream);
 extern "C" void addDilationalStiffness3Element_launch (
    int nelems,
    const int* elemNodeCounts, const int* elemPressureCounts,
@@ -953,6 +961,151 @@ int CuDssBridge::addLinearElasticStiffness3ElementDeviceValues (
    cudaFree (dvsD);
    if (!cudaOk (launchErr)) {
       myLastErr = "addLinearElasticStiffness3Element kernel launch failed";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   myItDiagDirty = true;
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
+int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
+   const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPairOffsets, const int* elemIpOffsets,
+   const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const double* elemParams,
+   const double* elemNodePositions, const double* naturalGrads,
+   const double* ipWeights, int nelems, double scale) {
+
+   if (!myHasPattern || !myValsD) {
+      myLastErr =
+         "addLinearElasticStiffness3ElementGeometryDeviceValues called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nelems < 0) {
+      myLastErr =
+         "addLinearElasticStiffness3ElementGeometryDeviceValues received a negative element count";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   if (nelems == 0) {
+      myLastErr = nullptr;
+      return CUDSS_BRIDGE_OK;
+   }
+
+   int nnodes = elemNodeOffsets[nelems];
+   int npairs = elemPairOffsets[nelems];
+   int nips = elemIpOffsets[nelems];
+   int ngrads = elemNaturalGradOffsets[nelems];
+   int *elemNodeCountsD = nullptr, *elemNodeOffsetsD = nullptr;
+   int *elemPairOffsetsD = nullptr, *elemIpOffsetsD = nullptr;
+   int *elemNaturalGradOffsetsD = nullptr;
+   int *pairNodeIdxsD = nullptr, *blockSlotsD = nullptr;
+   double *elemParamsD = nullptr, *elemNodePositionsD = nullptr;
+   double *naturalGradsD = nullptr, *ipWeightsD = nullptr;
+
+   const size_t elemBytes = (size_t)nelems * sizeof(int);
+   const size_t elemOffBytes = (size_t)(nelems + 1) * sizeof(int);
+   const size_t nodeBytes = (size_t)nnodes * 3 * sizeof(double);
+   const size_t pairIdxBytes = (size_t)npairs * 2 * sizeof(int);
+   const size_t slotBytes = (size_t)npairs * 9 * sizeof(int);
+   const size_t paramBytes = (size_t)nelems * 2 * sizeof(double);
+   const size_t gradBytes = (size_t)ngrads * 3 * sizeof(double);
+   const size_t weightBytes = (size_t)nips * sizeof(double);
+
+   if (!cudaOk (cudaMalloc (&elemNodeCountsD, elemBytes)) ||
+       !cudaOk (cudaMalloc (&elemNodeOffsetsD, elemOffBytes)) ||
+       !cudaOk (cudaMalloc (&elemPairOffsetsD, elemOffBytes)) ||
+       !cudaOk (cudaMalloc (&elemIpOffsetsD, elemOffBytes)) ||
+       !cudaOk (cudaMalloc (&elemNaturalGradOffsetsD, elemOffBytes)) ||
+       !cudaOk (cudaMalloc (&pairNodeIdxsD, pairIdxBytes)) ||
+       !cudaOk (cudaMalloc (&blockSlotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&elemParamsD, paramBytes)) ||
+       !cudaOk (cudaMalloc (&elemNodePositionsD, nodeBytes)) ||
+       !cudaOk (cudaMalloc (&naturalGradsD, gradBytes)) ||
+       !cudaOk (cudaMalloc (&ipWeightsD, weightBytes))) {
+      if (elemNodeCountsD) cudaFree (elemNodeCountsD);
+      if (elemNodeOffsetsD) cudaFree (elemNodeOffsetsD);
+      if (elemPairOffsetsD) cudaFree (elemPairOffsetsD);
+      if (elemIpOffsetsD) cudaFree (elemIpOffsetsD);
+      if (elemNaturalGradOffsetsD) cudaFree (elemNaturalGradOffsetsD);
+      if (pairNodeIdxsD) cudaFree (pairNodeIdxsD);
+      if (blockSlotsD) cudaFree (blockSlotsD);
+      if (elemParamsD) cudaFree (elemParamsD);
+      if (elemNodePositionsD) cudaFree (elemNodePositionsD);
+      if (naturalGradsD) cudaFree (naturalGradsD);
+      if (ipWeightsD) cudaFree (ipWeightsD);
+      myLastErr =
+         "cudaMalloc failed in addLinearElasticStiffness3ElementGeometryDeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_ALLOC;
+   }
+
+   if (!cudaOk (cudaMemcpyAsync (
+          elemNodeCountsD, elemNodeCounts, elemBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemNodeOffsetsD, elemNodeOffsets, elemOffBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemPairOffsetsD, elemPairOffsets, elemOffBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemIpOffsetsD, elemIpOffsets, elemOffBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemNaturalGradOffsetsD, elemNaturalGradOffsets, elemOffBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          pairNodeIdxsD, pairNodeIdxs, pairIdxBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          blockSlotsD, blockSlots, slotBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemParamsD, elemParams, paramBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemNodePositionsD, elemNodePositions, nodeBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          naturalGradsD, naturalGrads, gradBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          ipWeightsD, ipWeights, weightBytes,
+          cudaMemcpyHostToDevice, myStream))) {
+      cudaFree (elemNodeCountsD);
+      cudaFree (elemNodeOffsetsD);
+      cudaFree (elemPairOffsetsD);
+      cudaFree (elemIpOffsetsD);
+      cudaFree (elemNaturalGradOffsetsD);
+      cudaFree (pairNodeIdxsD);
+      cudaFree (blockSlotsD);
+      cudaFree (elemParamsD);
+      cudaFree (elemNodePositionsD);
+      cudaFree (naturalGradsD);
+      cudaFree (ipWeightsD);
+      myLastErr =
+         "cudaMemcpyAsync failed in addLinearElasticStiffness3ElementGeometryDeviceValues";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   addLinearElasticStiffness3ElementGeometry_launch (
+      nelems, elemNodeCountsD, elemNodeOffsetsD, elemPairOffsetsD,
+      elemIpOffsetsD, elemNaturalGradOffsetsD, pairNodeIdxsD, blockSlotsD,
+      elemParamsD, elemNodePositionsD, naturalGradsD, ipWeightsD, scale,
+      myValsD, myStream);
+   cudaError_t launchErr = cudaGetLastError();
+   cudaFree (elemNodeCountsD);
+   cudaFree (elemNodeOffsetsD);
+   cudaFree (elemPairOffsetsD);
+   cudaFree (elemIpOffsetsD);
+   cudaFree (elemNaturalGradOffsetsD);
+   cudaFree (pairNodeIdxsD);
+   cudaFree (blockSlotsD);
+   cudaFree (elemParamsD);
+   cudaFree (elemNodePositionsD);
+   cudaFree (naturalGradsD);
+   cudaFree (ipWeightsD);
+   if (!cudaOk (launchErr)) {
+      myLastErr =
+         "addLinearElasticStiffness3ElementGeometry kernel launch failed";
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    myItDiagDirty = true;

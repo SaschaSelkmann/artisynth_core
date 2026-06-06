@@ -451,6 +451,119 @@ extern "C" void addLinearElasticStiffness3Element_launch (
       globalScale, crsVals);
 }
 
+__device__ static double invert3 (
+   const double J[9], double invJ[9]) {
+
+   double c00 = J[4]*J[8] - J[5]*J[7];
+   double c01 = J[5]*J[6] - J[3]*J[8];
+   double c02 = J[3]*J[7] - J[4]*J[6];
+   double det = J[0]*c00 + J[1]*c01 + J[2]*c02;
+   double invDet = 1.0 / det;
+
+   invJ[0] = c00 * invDet;
+   invJ[1] = (J[2]*J[7] - J[1]*J[8]) * invDet;
+   invJ[2] = (J[1]*J[5] - J[2]*J[4]) * invDet;
+   invJ[3] = c01 * invDet;
+   invJ[4] = (J[0]*J[8] - J[2]*J[6]) * invDet;
+   invJ[5] = (J[2]*J[3] - J[0]*J[5]) * invDet;
+   invJ[6] = c02 * invDet;
+   invJ[7] = (J[1]*J[6] - J[0]*J[7]) * invDet;
+   invJ[8] = (J[0]*J[4] - J[1]*J[3]) * invDet;
+   return det;
+}
+
+__device__ static void computeSpatialGradient (
+   const double invJ[9], const double* gns, double* gnx) {
+
+   double sx = gns[0];
+   double sy = gns[1];
+   double sz = gns[2];
+   gnx[0] = invJ[0]*sx + invJ[3]*sy + invJ[6]*sz;
+   gnx[1] = invJ[1]*sx + invJ[4]*sy + invJ[7]*sz;
+   gnx[2] = invJ[2]*sx + invJ[5]*sy + invJ[8]*sz;
+}
+
+__global__ static void addLinearElasticStiffness3ElementGeometryKernel (
+   int nelems,
+   const int*    __restrict__ elemNodeCounts,
+   const int*    __restrict__ elemNodeOffsets,
+   const int*    __restrict__ elemPairOffsets,
+   const int*    __restrict__ elemIpOffsets,
+   const int*    __restrict__ elemNaturalGradOffsets,
+   const int*    __restrict__ pairNodeIdxs,
+   const int*    __restrict__ blockSlots,
+   const double* __restrict__ elemParams,
+   const double* __restrict__ elemNodePositions,
+   const double* __restrict__ naturalGrads,
+   const double* __restrict__ ipWeights,
+   double globalScale,
+   double*       __restrict__ crsVals) {
+
+   int e = blockIdx.x;
+   if (e >= nelems) {
+      return;
+   }
+   int nnodes = elemNodeCounts[e];
+   int node0 = elemNodeOffsets[e];
+   int pair0 = elemPairOffsets[e];
+   int npairs = elemPairOffsets[e + 1] - pair0;
+   int ip0 = elemIpOffsets[e];
+   int nips = elemIpOffsets[e + 1] - ip0;
+   int ng0 = elemNaturalGradOffsets[e];
+   int total = nips * npairs;
+
+   double D[36];
+   double sig[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+   fillLinearElasticD (elemParams[2*e], elemParams[2*e + 1], D);
+
+   for (int idx = threadIdx.x; idx < total; idx += blockDim.x) {
+      int ip = idx / npairs;
+      int pair = idx - ip * npairs;
+      int ipidx = ip0 + ip;
+      int ngBase = ng0 + ip * nnodes;
+
+      double J[9];
+      for (int k=0; k<9; k++) {
+         J[k] = 0.0;
+      }
+      for (int n=0; n<nnodes; n++) {
+         const double* pos = elemNodePositions + 3*(node0 + n);
+         const double* gns = naturalGrads + 3*(ngBase + n);
+         J[0] += pos[0]*gns[0]; J[1] += pos[0]*gns[1]; J[2] += pos[0]*gns[2];
+         J[3] += pos[1]*gns[0]; J[4] += pos[1]*gns[1]; J[5] += pos[1]*gns[2];
+         J[6] += pos[2]*gns[0]; J[7] += pos[2]*gns[1]; J[8] += pos[2]*gns[2];
+      }
+      double invJ[9];
+      double detJ = invert3 (J, invJ);
+
+      int pidx = pair0 + pair;
+      int i = pairNodeIdxs[2*pidx];
+      int j = pairNodeIdxs[2*pidx + 1];
+      double gi[3], gj[3];
+      computeSpatialGradient (invJ, naturalGrads + 3*(ngBase + i), gi);
+      computeSpatialGradient (invJ, naturalGrads + 3*(ngBase + j), gj);
+      double dv = detJ * ipWeights[ipidx];
+      addMaterialStiffness3Block (
+         blockSlots + 9*pidx, gi, D, sig, gj, dv, globalScale, crsVals);
+   }
+}
+
+extern "C" void addLinearElasticStiffness3ElementGeometry_launch (
+   int nelems,
+   const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPairOffsets, const int* elemIpOffsets,
+   const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const double* elemParams,
+   const double* elemNodePositions, const double* naturalGrads,
+   const double* ipWeights, double globalScale, double* crsVals,
+   cudaStream_t stream) {
+   const int threads = 256;
+   addLinearElasticStiffness3ElementGeometryKernel<<<nelems, threads, 0, stream>>>(
+      nelems, elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
+      elemNaturalGradOffsets, pairNodeIdxs, blockSlots, elemParams,
+      elemNodePositions, naturalGrads, ipWeights, globalScale, crsVals);
+}
+
 __global__ static void addDilationalStiffness3ElementKernel (
    int nelems,
    const int*    __restrict__ elemNodeCounts,
