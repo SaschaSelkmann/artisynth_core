@@ -409,15 +409,40 @@ geometry kernel (which recomputes it from rest positions). The solve is a fixed
 ~60 ms. So no amount of GPU assembly speed helps until the CPU stops computing
 the stiffness. (A bigger GPU would not change this — the cap is CPU-side.)
 
-**Key optimization (the real win, not yet done):** when GPU assembly is active,
-the CPU should compute FORCES ONLY (`FemModel3d.updateStress()`, ~half the cost)
-and let the GPU own the stiffness. Blocker: the J*v term (§14) currently needs
-the CPU neighbour stiffness via `assembleGpuVelJacobianCrsValues`. To go
-forces-only, J*v must be computed without CPU stiffness — either a device-side
-velocity-Jacobian SpMV, or a matrix-free K*v. Secondary win: for LINEAR material
-the stiffness is constant, so even the CPU recompute is redundant after step 1
-(cache it). These are substantial, correctness-sensitive changes — the verifyCrs
-net + equivalence tests are the safety harness for attempting them.
+**Key optimization (DONE — cache the constant stiffness):** the redundant
+per-step stiffness recompute was eliminated the safe way. The caching machinery
+already existed (`updateStressAndStiffness` and `computeStressAndStiffness` skip
+the stiffness when `myStiffnessesValidP` is true); the only reason it never kicked
+in is that `FemModel.updateSlavePos()` calls `invalidateStressAndMaybeStiffness()`
+every step, which unconditionally cleared the stiffness — despite the "Maybe" in
+its name. FemModel3d now overrides it to keep the stiffness valid when
+`hasConstantStiffness()` (the same non-corotated-linear gate as the GPU geometry
+kernel, so it is provably position-independent). A structural/material change
+still calls the full `invalidateStressAndStiffness`, forcing a recompute.
+
+Correctness is guaranteed by the verifyCrs net itself: the GPU geometry kernel
+RECOMPUTES the stiffness from rest positions every step while the CPU now caches
+it; verifyCrs compares them and holds to ~1e-14 across steps, proving the cached
+value equals the fresh one.
+
+Result (GTX 1650, ms/step):
+
+| size      | CPU before | CPU after | GPU before | GPU after |
+|-----------|-----------|-----------|------------|-----------|
+| 16x8x8    | 124       | 89        | 118        | 94        |
+| 20x10x10  | 289       | ~140      | 270        | ~140      |
+| 24x12x12  | 372       | 272       | 366        | 297       |
+
+So caching is a big absolute win (~20-45%) on BOTH paths. The catch: it helps the
+CPU equally, so after it the GPU directCrs path is roughly TIED with CPU (the
+remaining cost is the fixed ~60 ms cuDSS solve + CPU forces + the GPU's own
+marshalling/H2D/J*v-scatter overhead). On this hardware/these sizes the GPU
+assembly does not clearly beat CPU once the stiffness recompute is gone.
+
+**Remaining levers (smaller, harder):** to make the GPU *win*, move the FORCES to
+the GPU too and remove the CPU J*v scatter (device-side velocity-Jacobian SpMV) —
+but the solve is a fixed floor, so the ceiling is limited. The big, broadly
+useful win was the stiffness cache.
 
 ## 15. Attachments to fixed masters now use the GPU path (2026-06-07)
 
