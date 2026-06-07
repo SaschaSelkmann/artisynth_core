@@ -380,6 +380,48 @@ After the fix the KKT verify holds at maxErr ~2e-14 across all steps. This is wh
 the single-step `testBackwardEulerLinearElasticEquivalence` missed it — a proper
 multi-step assembly guard belongs in the CI verify task.
 
+## 19. GPU assembly on by default for cuDSS; BigBeam3d runs on the GPU (2026-06-07)
+
+Until now the GPU device assembly engaged only behind obscure system
+properties, so the flagship demo BigBeam3d still ran its assembly on the CPU
+even with `-matrixSolver CuDss`. Two gates were the issue:
+
+- `enableGpuAssemblyDirectCrs()` (plain BackwardEuler directCrs) was already
+  default-on for cuDSS.
+- The **KKT M-block** device path (ConstrainedBackwardEuler, which is BigBeam3d's
+  integrator) was gated behind `artisynth.gpuAssembly.kktDeviceValues` (default
+  off), applied at startup from `SimulationSettings`. Defaulted it ON (opt out
+  with `-Dartisynth.gpuAssembly.disableKktDeviceValues=true`), in both the
+  `KKTSolver` flag and the `SimulationSettings` default.
+
+Result: `artisynth -matrixSolver CuDss -model artisynth.demos.fem.BigBeam3d`
+now GPU-assembles its stiffness out of the box — status shows
+`deviceCrs=true directCrsStatus=kktDeviceMContributions` with
+`linearGeomElem3` firing. This works because of the earlier fixed-attachment fix
+(BigBeam's blocks are `setDynamic(false)`) plus the three correctness bug fixes.
+
+Verified safe:
+- BigBeam3d under verifyCrs: no failure across steps (correct).
+- A FEM contact demo (FemPlaneCollide) under cuDSS+verifyCrs: engages the device
+  M-block (`block3` path, `valueSource=hostMatrixValuesToDeviceCrs`), no
+  verification failure — graceful and correct (contact constraints stay on CPU).
+- KKTSolverTest, CuDssSolverTest, FemModel3dTest all pass.
+- New default-suite test `testConstrainedBackwardEulerEquivalence` (BigBeam-like:
+  FEM + fixed-block attachment + ConstrainedBackwardEuler) matches Pardiso to
+  ~8e-16. It needs no system property, so it is the first real-config GPU test
+  that runs by default.
+
+Caveat fixed along the way: the legacy CPU-context KKT velocity-Jacobian verify
+ran even when the velocity Jacobian fell back to CPU (it always does — the legacy
+`addGpuVelJacobian` hook is unimplemented), comparing a partial M-block context
+against the full KKT matrix (with constraint blocks) and spuriously failing under
+verifyCrs. Now gated on `gpuVel`. The real device check is verifyKktMDeviceCrsValues.
+
+Still on CPU (known, harmless): the KKT velocity-Jacobian *fictitious force* (the
+`J*v` term for the RHS) — the legacy GPU hook is unimplemented, so it is computed
+on CPU (cheap, especially with the constant-stiffness cache). BigBeam is verified
+correct regardless. Wiring it to the CrsValues path is a future nicety.
+
 ## 18. Free rigid bodies on the GPU; joints/FEM-body coupling assessment (2026-06-07)
 
 Investigating "joints (FrameSpring) + active rigid bodies / active-master
