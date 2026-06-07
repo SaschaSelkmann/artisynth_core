@@ -394,6 +394,63 @@ public class AxialSpring extends PointSpringBase
       mySeg.addVelJacobian (M, s, dFdldot, Tmp);
    }
 
+   // GPU assembly: emit this spring's position/velocity Jacobian blocks into a
+   // GpuAssemblyContext, so a model containing axial springs/muscles can use the
+   // direct-CRS device assembly path instead of falling back to CPU. Mirrors
+   // addPosJacobian/addVelJacobian above. The *Values variants write the CPU CRS
+   // reference used by the J*v term and verifyCrs; the *Contributions variants
+   // emit the device descriptors.
+   private boolean assemblePosJacobianCrs (
+      MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      if (hasEndPoints()) {
+         Matrix3d Tmp = new Matrix3d();
+         double l = getLength();
+         double ldot = getLengthDot();
+         double F = computeF (l, ldot);
+         double dFdl = computeDFdl (l, ldot);
+         double dFdldot = computeDFdldot (l, ldot);
+         mySeg.addPosJacobianCrs (
+            context, s, F, dFdl, dFdldot, l, Tmp, asValues);
+      }
+      return true;
+   }
+
+   private boolean assembleVelJacobianCrs (
+      MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      if (hasEndPoints()) {
+         Matrix3d Tmp = new Matrix3d();
+         double l = getLength();
+         double ldot = getLengthDot();
+         double dFdldot = computeDFdldot (l, ldot);
+         mySeg.addVelJacobianCrs (context, s, dFdldot, Tmp, asValues);
+      }
+      return true;
+   }
+
+   @Override
+   public boolean assemblePosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assemblePosJacobianCrs (context, s, /*asValues=*/false);
+   }
+
+   @Override
+   public boolean assemblePosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assemblePosJacobianCrs (context, s, /*asValues=*/true);
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assembleVelJacobianCrs (context, s, /*asValues=*/false);
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assembleVelJacobianCrs (context, s, /*asValues=*/true);
+   }
+
    /* --- Begin ForceTargetComponent interface (for inverse controller) --- */
 
    public int getForceSize() {

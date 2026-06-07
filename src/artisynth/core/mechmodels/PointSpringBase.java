@@ -726,12 +726,90 @@ public abstract class PointSpringBase extends Spring
          }
          if (blk11Num != -1) {
             S.getBlockByNumber(blk11Num).add (M);
-         }               
+         }
          if (blk01Num != -1) {
             S.getBlockByNumber(blk01Num).sub (M);
          }
          if (blk10Num != -1) {
             S.getBlockByNumber(blk10Num).sub (M);
+         }
+      }
+
+      // GPU assembly: mirror addToJacobianBlocks into a GpuAssemblyContext. When
+      // asValues is false the 3x3 blocks are emitted as device-side scaledBlock3
+      // contributions (and the CPU CRS mirror); when true they are written only
+      // into the context's CPU CRS value array (used as the J*v / verifyCrs
+      // reference, where the device descriptors must NOT be double-counted).
+      protected void addToJacobianCrs (
+         MechSystem.GpuAssemblyContext context, Matrix3d M, boolean asValues) {
+         if (asValues) {
+            addBlock3ToCrsValues (context, blk00Num,  1.0, M);
+            addBlock3ToCrsValues (context, blk11Num,  1.0, M);
+            addBlock3ToCrsValues (context, blk01Num, -1.0, M);
+            addBlock3ToCrsValues (context, blk10Num, -1.0, M);
+         }
+         else {
+            if (blk00Num != -1) {
+               context.addScaledBlock3CrsValueContribution (blk00Num,  1.0, M);
+            }
+            if (blk11Num != -1) {
+               context.addScaledBlock3CrsValueContribution (blk11Num,  1.0, M);
+            }
+            if (blk01Num != -1) {
+               context.addScaledBlock3CrsValueContribution (blk01Num, -1.0, M);
+            }
+            if (blk10Num != -1) {
+               context.addScaledBlock3CrsValueContribution (blk10Num, -1.0, M);
+            }
+         }
+      }
+
+      protected void addPosJacobianCrs (
+         MechSystem.GpuAssemblyContext context, double s, double F, double dFdl,
+         double dFdldot, double len, Matrix3d T, boolean asValues) {
+         computeForcePositionJacobian (
+            T, F, dFdl, dFdldot, len, myIgnoreCoriolisInJacobian);
+         T.scale (s);
+         addToJacobianCrs (context, T, asValues);
+      }
+
+      protected void addVelJacobianCrs (
+         MechSystem.GpuAssemblyContext context, double s, double dFdldot,
+         Matrix3d T, boolean asValues) {
+         computeForceVelocityJacobian (T, dFdldot);
+         T.scale (s);
+         addToJacobianCrs (context, T, asValues);
+      }
+
+      private void addBlock3ToCrsValues (
+         MechSystem.GpuAssemblyContext context, int blkNum, double scale,
+         Matrix3d M) {
+         if (blkNum == -1) {
+            return;
+         }
+         SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+            context.getSlotMap();
+         if (!slotMap.hasBlockSlots (blkNum)) {
+            return;
+         }
+         double[] vals = context.getCrsValues();
+         addCrsVal (vals, slotMap, blkNum, 0, 0, scale*M.m00);
+         addCrsVal (vals, slotMap, blkNum, 0, 1, scale*M.m01);
+         addCrsVal (vals, slotMap, blkNum, 0, 2, scale*M.m02);
+         addCrsVal (vals, slotMap, blkNum, 1, 0, scale*M.m10);
+         addCrsVal (vals, slotMap, blkNum, 1, 1, scale*M.m11);
+         addCrsVal (vals, slotMap, blkNum, 1, 2, scale*M.m12);
+         addCrsVal (vals, slotMap, blkNum, 2, 0, scale*M.m20);
+         addCrsVal (vals, slotMap, blkNum, 2, 1, scale*M.m21);
+         addCrsVal (vals, slotMap, blkNum, 2, 2, scale*M.m22);
+      }
+
+      private void addCrsVal (
+         double[] vals, SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap,
+         int blkNum, int i, int j, double value) {
+         int slot = slotMap.getBlockValueSlot (blkNum, i, j);
+         if (slot != -1) {
+            vals[slot] += value;
          }
       }
 
