@@ -380,6 +380,45 @@ After the fix the KKT verify holds at maxErr ~2e-14 across all steps. This is wh
 the single-step `testBackwardEulerLinearElasticEquivalence` missed it — a proper
 multi-step assembly guard belongs in the CI verify task.
 
+## 16. Perf measurement: the GPU path barely wins yet (2026-06-07)
+
+Measured a pure non-corotated linear tet beam, BackwardEuler + cuDSS, on a
+GTX 1650 (`gpudebug/PerfRunner`, ms/step, warm):
+
+| size      | ~DOF  | CPU (Pardiso) | GPU (cuDSS directCrs) | speedup |
+|-----------|-------|---------------|-----------------------|---------|
+| 16x8x8    | 3.5k  | 124 ms        | 118 ms                | ~5%     |
+| 20x10x10  | 7.6k  | 289 ms        | 270 ms                | ~7%     |
+| 24x12x12  | 13k   | 372 ms        | 366 ms                | ~2%     |
+
+So the GPU assembly path currently delivers only a few percent, and the win does
+NOT grow with size. Per-phase profile (`-Dartisynth.gpuAssembly.profile=true`)
+shows where a GPU step's time goes (7.6k DOF):
+
+- `updateStressAndStiffness` (CPU): ~48–80 ms — the CPU still computes the full
+  FEM stress AND stiffness every step.
+- cuDSS `solve`: ~58–67 ms.
+- `addPosJac` (the stiffness CRS build, now on the GPU geometry kernel): ~0 ms.
+- the J*v velocity-Jacobian CPU scatter added by the §14 fix: part of the
+  remaining matrix-assembly time.
+
+**Diagnosis:** the GPU kernels eliminated the CRS *build* (the ~65 ms "block ->
+CRS" from the original profiling), but the FEM stiffness *computation* is still
+done on the CPU inside `updateStressAndStiffness`, redundantly with the GPU
+geometry kernel (which recomputes it from rest positions). The solve is a fixed
+~60 ms. So no amount of GPU assembly speed helps until the CPU stops computing
+the stiffness. (A bigger GPU would not change this — the cap is CPU-side.)
+
+**Key optimization (the real win, not yet done):** when GPU assembly is active,
+the CPU should compute FORCES ONLY (`FemModel3d.updateStress()`, ~half the cost)
+and let the GPU own the stiffness. Blocker: the J*v term (§14) currently needs
+the CPU neighbour stiffness via `assembleGpuVelJacobianCrsValues`. To go
+forces-only, J*v must be computed without CPU stiffness — either a device-side
+velocity-Jacobian SpMV, or a matrix-free K*v. Secondary win: for LINEAR material
+the stiffness is constant, so even the CPU recompute is redundant after step 1
+(cache it). These are substantial, correctness-sensitive changes — the verifyCrs
+net + equivalence tests are the safety harness for attempting them.
+
 ## 15. Attachments to fixed masters now use the GPU path (2026-06-07)
 
 Previously ANY attachment disabled the device assembly:
