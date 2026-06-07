@@ -2628,8 +2628,13 @@ public class MechSystemSolver {
          if (!gpuVel) {
             mySys.addVelJacobian (S, myC, a0);
          }
-         crsVerified = verifyGpuVelJacobianCrs (
-            a0, "KKT velocity Jacobian");
+         // The old CPU-context velocity-Jacobian verify compares against the
+         // full KKT matrix; skip it when the velocity Jacobian fell back to CPU
+         // (gpuVel false), where there is no GPU assembly to check and the KKT
+         // constraint blocks would make the comparison spuriously fail. The
+         // real device check for the KKT M block is verifyKktMDeviceCrsValues.
+         crsVerified =
+            gpuVel && verifyGpuVelJacobianCrs (a0, "KKT velocity Jacobian");
          tVelJac =
             myGpuAssemblyProfilingEnabled ? System.nanoTime() : tVelJac;
          if (useFictitousJacobianForces) {
