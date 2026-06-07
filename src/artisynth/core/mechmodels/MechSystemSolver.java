@@ -1967,6 +1967,15 @@ public class MechSystemSolver {
          myC.setZero();
          if (mySys.assembleGpuVelJacobianCrsValueContributions (
                 directCrsContext, myC, -h)) {
+            // The element-kernel contribution builders (linear-elastic,
+            // material3, dilational) fill only their device descriptor arrays,
+            // not the context's CPU CRS value array, so getCrsValues() is
+            // missing those stiffness terms here. The J*v term below
+            // (mulAddCrsValues) needs the COMPLETE velocity Jacobian on the
+            // host, so assemble it via the neighbor-based CPU path. The device
+            // descriptors are stored separately and are unaffected.
+            directCrsContext.clearCrsValues();
+            mySys.assembleGpuVelJacobianCrsValues (directCrsContext, -h);
             directCrsVelValues = directCrsContext.getCrsValues().clone();
             if (useFictitousJacobianForces) {
                directCrsVelForces = new VectorNd (myC);
