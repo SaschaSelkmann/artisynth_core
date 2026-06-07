@@ -928,6 +928,69 @@ public class Frame extends DynamicComponentBase
       // nothing to do, block will already have been added
    }
 
+   // GPU assembly hooks. A frame's position Jacobian is empty (gravity is
+   // constant); its velocity Jacobian is the frame/rotary damping on the 6x6
+   // diagonal solve block. The *Values variants write only the CPU CRS
+   // reference (used by the J*v term / verifyCrs); the *Contributions variants
+   // emit the device descriptors. Mirrors addVelJacobian / addFrameDamping.
+   private boolean assembleVelJacobianCrs (
+      MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      if (mySolveBlockNum != -1 &&
+          (myFrameDamping != 0 || myRotaryDamping != 0)) {
+         double dt = -s * myFrameDamping;   // addFrameDamping subtracts
+         double dr = -s * myRotaryDamping;
+         addDiagCrs (context, 0, dt, asValues);
+         addDiagCrs (context, 1, dt, asValues);
+         addDiagCrs (context, 2, dt, asValues);
+         addDiagCrs (context, 3, dr, asValues);
+         addDiagCrs (context, 4, dr, asValues);
+         addDiagCrs (context, 5, dr, asValues);
+      }
+      return true;
+   }
+
+   private void addDiagCrs (
+      MechSystem.GpuAssemblyContext context, int k, double value,
+      boolean asValues) {
+      if (value == 0) {
+         return;
+      }
+      int slot = context.getSlotMap().getBlockValueSlot (mySolveBlockNum, k, k);
+      if (slot < 0) {
+         return;
+      }
+      if (asValues) {
+         context.getCrsValues()[slot] += value;
+      }
+      else {
+         context.addCrsValueContribution (slot, value);
+      }
+   }
+
+   @Override
+   public boolean assemblePosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return true;   // empty
+   }
+
+   @Override
+   public boolean assemblePosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return true;   // empty
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assembleVelJacobianCrs (context, s, /*asValues=*/false);
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assembleVelJacobianCrs (context, s, /*asValues=*/true);
+   }
+
    public int getJacobianType() {
       return Matrix.SPD;
    }

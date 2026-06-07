@@ -987,6 +987,67 @@ public class FemModel3dTest extends UnitTest {
          "FEM+spring GPU equivalence ok: max="+max+" (ref="+ref+")");
    }
 
+   // Steps a non-corotated linear FEM beam alongside a FREE rigid body (with
+   // frame/rotary damping) falling under gravity. The body's 6x6 mass (generic
+   // block scatter) and frame-damping velocity Jacobian (Frame GPU hooks) must
+   // assemble on the device. Guards active rigid-body GPU assembly.
+   private double[] runFreeBodyStep (maspack.solvers.SparseSolverId solverId) {
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel();
+      mech.setIntegrator (MechSystemSolver.Integrator.BackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      RigidBody body = RigidBody.createBox ("body", 0.2, 0.2, 0.2, 1000);
+      body.setPose (new RigidTransform3d (1.0, 0, 0));
+      body.setFrameDamping (5.0);
+      body.setRotaryDamping (1.0);
+      mech.addRigidBody (body);
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testBackwardEulerFreeBodyEquivalence() {
+      if (!Boolean.getBoolean ("artisynth.gpuAssembly.directCrs")) {
+         return;
+      }
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         System.out.println (
+            "Skipping FEM+free-body GPU equivalence test: cuDSS unavailable");
+         return;
+      }
+      double[] gpu = runFreeBodyStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu = runFreeBodyStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "FEM+free-body GPU vs CPU step velocity mismatch: max="+max+
+            " (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "FEM+free-body GPU equivalence ok: max="+max+" (ref="+ref+")");
+   }
+
    void checkNumbering (FemModel3d fem, boolean zeroBased) {
       int inc = zeroBased ? 0 : 1;
       for (int i=0; i< fem.numNodes(); i++) {
@@ -1059,6 +1120,7 @@ public class FemModel3dTest extends UnitTest {
       testBackwardEulerLinearElasticEquivalence();
       testBackwardEulerFixedAttachmentEquivalence();
       testBackwardEulerSpringEquivalence();
+      testBackwardEulerFreeBodyEquivalence();
       testFindNearestElement();
       testSetNumbering();
       testFemCopy();
