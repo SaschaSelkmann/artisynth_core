@@ -4326,7 +4326,11 @@ PointAttachable, ConnectableBody {
          elemParams[2*elemIdx+1] = mat.getPoissonsRatio();
 
          for (int i=0; i<e.myNodes.length; i++) {
-            Vector3d pos = e.myNodes[i].getLocalPosition();
+            // non-corotated linear stiffness is evaluated at the REST
+            // configuration (it is constant); the geometry kernel must build
+            // its spatial gradients from rest positions, not the current
+            // (deformed) ones, or the stiffness drifts as the mesh deforms.
+            Vector3d pos = e.myNodes[i].getRestPosition();
             int posBase = 3*elemNodeIdx++;
             elemNodePositions[posBase++] = pos.x;
             elemNodePositions[posBase++] = pos.y;

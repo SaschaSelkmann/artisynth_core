@@ -774,6 +774,12 @@ public class FemModel3dTest extends UnitTest {
       mech.setIntegrator (MechSystemSolver.Integrator.BackwardEuler);
       mech.setMatrixSolver (solverId);
       mech.addModel (fem);
+      // NOTE: a single step from rest (v=0) does not exercise the velocity
+      // Jacobian (J*v) term or a stiffness that drifts with deformation. The
+      // per-step device CRS verification (verifyGpuDeviceCrsValues, and the KKT
+      // verify) covers the assembled matrix across steps; a multi-step BACKWARD
+      // EULER behavioural comparison currently also exposes a separate directCrs
+      // RHS divergence (see gpu_assembly_findings.md), so this stays single-step.
       mech.preadvance (0, 0.005, /*flags=*/0);
       mech.advance (0, 0.005, /*flags=*/0);
       VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
