@@ -2695,6 +2695,30 @@ PointAttachable, ConnectableBody {
       // should invalidate matrices for incompressibility here. However, at the
       // moment these are being rebuilt for each calculation anyway
    }
+
+   // True when every solid element uses a non-corotated linear-elastic material
+   // with no field, state, augmenting/auxiliary materials, shells or soft
+   // incompressibility — exactly the condition under which the GPU linear-elastic
+   // geometry kernel applies. For these the element stiffness is evaluated at the
+   // rest configuration and does NOT change as the mesh deforms, so it can be
+   // cached across deformation steps.
+   protected boolean hasConstantStiffness() {
+      return canAssembleLinearElasticStiffness3CrsValueContributions (
+         getAugmentingMaterials());
+   }
+
+   @Override
+   protected void invalidateStressAndMaybeStiffness() {
+      myStressesValidP = false;
+      // Keep the (constant) stiffness cached across deformation steps when it is
+      // position-independent; a structural/material change calls the full
+      // invalidateStressAndStiffness, which still forces a recompute. This skips
+      // the per-step stiffness recompute in updateStressAndStiffness, which the
+      // GPU geometry kernel (and the CPU solve) would otherwise redo every step.
+      if (!hasConstantStiffness()) {
+         myStiffnessesValidP = false;
+      }
+   }
    
    @Override
    protected void updateNodeForces(double t) {
