@@ -28,8 +28,12 @@ public class KKTSolver {
    public static String myQPTestCaseFile = null; // "contactQP.txt";
    private static boolean myGpuAssemblyProfilingEnabled =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
+   // On by default. The device M-block assembly only actually engages when
+   // cuDSS is the KKT solver AND the contributions are complete (otherwise it
+   // falls back transparently to host values). Opt out with
+   // -Dartisynth.gpuAssembly.disableKktDeviceValues=true.
    private static boolean myKktDeviceValuesEnabled =
-      Boolean.getBoolean ("artisynth.gpuAssembly.kktDeviceValues");
+      !Boolean.getBoolean ("artisynth.gpuAssembly.disableKktDeviceValues");
 
    public static boolean getGpuAssemblyProfilingEnabled() {
       return myGpuAssemblyProfilingEnabled;

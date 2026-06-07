@@ -55,8 +55,12 @@ public class SimulationSettings extends SettingsBase {
    public static final boolean DEFAULT_GPU_ASSEMBLY_PROFILING =
       Boolean.getBoolean ("artisynth.gpuAssembly.profile");
 
+   // On by default: with the cuDSS solver, KKT systems factor from device-side
+   // CRS values assembled by the GPU kernels (falling back transparently to host
+   // values when the contributions are incomplete). Opt out with
+   // -Dartisynth.gpuAssembly.disableKktDeviceValues=true.
    public static final boolean DEFAULT_GPU_ASSEMBLY_KKT_DEVICE_VALUES =
-      Boolean.getBoolean ("artisynth.gpuAssembly.kktDeviceValues");
+      !Boolean.getBoolean ("artisynth.gpuAssembly.disableKktDeviceValues");
 
    public static final boolean DEFAULT_CUDSS_TIMING =
       Boolean.getBoolean ("artisynth.cudss.timing");
