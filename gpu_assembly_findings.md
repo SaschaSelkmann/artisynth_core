@@ -380,17 +380,23 @@ After the fix the KKT verify holds at maxErr ~2e-14 across all steps. This is wh
 the single-step `testBackwardEulerLinearElasticEquivalence` missed it — a proper
 multi-step assembly guard belongs in the CI verify task.
 
-**Third finding, OPEN (not yet fixed):** a multi-step cuDSS-device vs Pardiso
-BACKWARD-EULER behavioural comparison still diverges (~11% after 6 steps) even
-though `verifyGpuDeviceCrsValues` passes every step (the assembled MATRIX is
-correct). So the divergence is in the directCrs RHS, not the stiffness. Prime
-suspect: `directCrsVelValues = directCrsContext.getCrsValues().clone()` is taken
-right after the *Contributions* assembly, but the contribution methods (e.g.
-`addScaledBlock3CrsValueContribution`) only fill the descriptor arrays, NOT the
-context's CRS value array — so `directCrsVelValues` is likely all zeros and the
-`mulAddCrsValues(myB, myU, ...)` J*v term is missing. Harmless at step 1 (v=0),
-wrong once velocity builds up. Needs confirmation + fix; the linear behavioural
-test is kept single-step until then.
+**Third real bug, FIXED:** a multi-step cuDSS-device vs Pardiso backward-euler
+behavioural comparison diverged (~11% after 6 steps) even though
+`verifyGpuDeviceCrsValues` passed every step (the assembled MATRIX is correct) —
+so the divergence was in the directCrs RHS, not the stiffness. Root cause: the
+ELEMENT-kernel contribution builders (linear-elastic geometry, material3,
+dilational) fill only their device descriptor arrays, NOT the context's CPU CRS
+value array (`myCrsValues`) — only the generic/block3/diag3 builders mirror to
+`myCrsValues`. So `directCrsVelValues = directCrsContext.getCrsValues().clone()`,
+captured after the velocity-Jacobian *Contributions* assembly, was missing the
+stiffness-damping (`beta*K`) part, and the `mulAddCrsValues(myB, myU, ...)` J*v
+term was incomplete. Harmless at step 1 (v=0), wrong once velocity builds up
+(~beta = stiffnessDamping ≈ 11%). Fix: assemble the COMPLETE velocity Jacobian on
+the host via the neighbor-based `assembleGpuVelJacobianCrsValues` for the J*v
+term (the device assembly still uses the descriptors). After the fix the
+multi-step behavioural comparison matches to ~1.1e-15, and the linear equivalence
+test now steps 6 times. (Perf note: this adds a CPU velocity-Jacobian CRS scatter
+to the directCrs path; computing J*v on the device later would remove it.)
 
 Gotcha discovered: `corotated` is an **inherited** property
 (`LinearMaterialBase`, default `PropertyMode.Inherited`); constructing
