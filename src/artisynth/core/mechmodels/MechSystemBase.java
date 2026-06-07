@@ -2397,7 +2397,34 @@ public abstract class MechSystemBase extends RenderableModelBase
    }    
 
    private boolean hasAttachmentJacobianContributions() {
-      return myAttachments != null && myAttachments.size() > 0;
+      // An attachment only modifies the dynamic solve matrix when at least one
+      // of its masters is active: the reduction (addAttachmentJacobian)
+      // transfers slave stiffness onto active master DOFs. Attachments whose
+      // masters are all inactive (e.g. FEM nodes pinned to a fixed frame)
+      // behave exactly like fixed slave nodes, which the GPU FEM kernels
+      // already handle by skipping solve-index -1 — so they do NOT need to
+      // disable the device assembly path. (The GPU reduction onto active
+      // masters is not yet implemented; those still fall back to CPU.)
+      if (myAttachments == null) {
+         return false;
+      }
+      for (int i=0; i<myAttachments.size(); i++) {
+         for (DynamicComponent m : myAttachments.get(i).getMasters()) {
+            if (m.isActive()) {
+               return true;
+            }
+         }
+      }
+      return false;
+   }
+
+   // A non-active dynamic component (e.g. a fixed rigid body acting as a
+   // boundary/attachment master) contributes nothing to the active-DOF
+   // Jacobian, so it must not disable GPU device assembly even though the
+   // default ForceEffector.assemble*CrsValue* returns false ("unsupported").
+   private static boolean skipGpuForceEffector (ForceEffector fe) {
+      return (fe instanceof DynamicComponent) &&
+             !((DynamicComponent)fe).isActive();
    }
 
    public boolean assembleGpuPosJacobianCrsValues (
@@ -2412,8 +2439,11 @@ public abstract class MechSystemBase extends RenderableModelBase
       }
       boolean complete = true;
       for (int i=0; i<myForceEffectors.size(); i++) {
-         if (!myForceEffectors.get(i).assemblePosJacobianCrsValues (
-                context, s)) {
+         ForceEffector fe = myForceEffectors.get(i);
+         if (skipGpuForceEffector (fe)) {
+            continue;
+         }
+         if (!fe.assemblePosJacobianCrsValues (context, s)) {
             complete = false;
          }
       }
@@ -2439,8 +2469,11 @@ public abstract class MechSystemBase extends RenderableModelBase
       }
       boolean complete = true;
       for (int i=0; i<myForceEffectors.size(); i++) {
-         if (!myForceEffectors.get(i).assemblePosJacobianCrsValueContributions (
-                context, s)) {
+         ForceEffector fe = myForceEffectors.get(i);
+         if (skipGpuForceEffector (fe)) {
+            continue;
+         }
+         if (!fe.assemblePosJacobianCrsValueContributions (context, s)) {
             complete = false;
          }
       }
@@ -2462,8 +2495,11 @@ public abstract class MechSystemBase extends RenderableModelBase
       }
       boolean complete = true;
       for (int i=0; i<myForceEffectors.size(); i++) {
-         if (!myForceEffectors.get(i).assembleVelJacobianCrsValues (
-                context, s)) {
+         ForceEffector fe = myForceEffectors.get(i);
+         if (skipGpuForceEffector (fe)) {
+            continue;
+         }
+         if (!fe.assembleVelJacobianCrsValues (context, s)) {
             complete = false;
          }
       }
@@ -2489,8 +2525,11 @@ public abstract class MechSystemBase extends RenderableModelBase
       }
       boolean complete = true;
       for (int i=0; i<myForceEffectors.size(); i++) {
-         if (!myForceEffectors.get(i).assembleVelJacobianCrsValueContributions (
-                context, s)) {
+         ForceEffector fe = myForceEffectors.get(i);
+         if (skipGpuForceEffector (fe)) {
+            continue;
+         }
+         if (!fe.assembleVelJacobianCrsValueContributions (context, s)) {
             complete = false;
          }
       }

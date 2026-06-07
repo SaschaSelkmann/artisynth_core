@@ -855,6 +855,73 @@ public class FemModel3dTest extends UnitTest {
          " kernel="+ncMax+" (ref="+ncRef+")");
    }
 
+   // Steps a non-corotated linear FEM beam whose x-min face is ATTACHED (point
+   // attachments) to a fixed rigid frame, instead of being pinned with
+   // setDynamic(false). A fixed (inactive) attachment master adds nothing to the
+   // dynamic solve matrix, so the GPU device assembly should engage and match
+   // the CPU. Guards the refined attachment gate (skipping fixed-master
+   // attachments and inactive-component force effectors).
+   private double[] runFixedAttachmentStep (
+      maspack.solvers.SparseSolverId solverId) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+
+      MechModel mech = new MechModel();
+      mech.setIntegrator (MechSystemSolver.Integrator.BackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      RigidBody frame = RigidBody.createBox ("frame", 0.1, 0.5, 0.5, 1000);
+      frame.setPose (new RigidTransform3d (-0.55, 0, 0));
+      frame.setDynamic (false);
+      mech.addRigidBody (frame);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            mech.attachPoint (node, frame);
+         }
+      }
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testBackwardEulerFixedAttachmentEquivalence() {
+      if (!Boolean.getBoolean ("artisynth.gpuAssembly.directCrs")) {
+         return;
+      }
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         System.out.println (
+            "Skipping fixed-attachment GPU equivalence test: cuDSS unavailable");
+         return;
+      }
+      double[] gpu =
+         runFixedAttachmentStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu =
+         runFixedAttachmentStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "fixed-attachment GPU vs CPU step velocity mismatch: max="+max+
+            " (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "fixed-attachment GPU equivalence ok: max="+max+" (ref="+ref+")");
+   }
+
    void checkNumbering (FemModel3d fem, boolean zeroBased) {
       int inc = zeroBased ? 0 : 1;
       for (int i=0; i< fem.numNodes(); i++) {
@@ -925,6 +992,7 @@ public class FemModel3dTest extends UnitTest {
       testLinearElasticStiffness3Routing();
       testBackwardEulerDirectCrsSolve();
       testBackwardEulerLinearElasticEquivalence();
+      testBackwardEulerFixedAttachmentEquivalence();
       testFindNearestElement();
       testSetNumbering();
       testFemCopy();
