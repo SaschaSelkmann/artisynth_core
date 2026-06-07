@@ -1428,8 +1428,16 @@ public class MechSystemSolver {
          maybeWarnGpuAssemblyCrsVerifyIncomplete (phase);
          return;
       }
-      double[] cpuVals = context.getCrsValues();
+      checkDeviceCrsMatch (phase, gpuVals, context.getCrsValues());
+   }
 
+   // Entrywise GPU-vs-CPU comparison of assembled CRS values, throwing on
+   // mismatch. Tolerance accommodates floating-point summation-order differences
+   // (atomic adds on the device vs sequential on the host).
+   private void checkDeviceCrsMatch (
+      String phase, double[] gpuVals, double[] cpuVals) {
+
+      int nnz = cpuVals.length;
       double ref = 0;
       for (int i=0; i<nnz; i++) {
          ref = Math.max (ref, Math.abs (cpuVals[i]));
@@ -1450,6 +1458,127 @@ public class MechSystemSolver {
             ": max error "+maxErr+" at CRS value "+maxIdx+
             " (tol="+tol+", gpu="+gpuVals[maxIdx]+", cpu="+cpuVals[maxIdx]+")");
       }
+   }
+
+   // Dispatches all FEM stiffness contribution categories held by a context to
+   // the device-side CRS value buffer of the given solver. Shared by the
+   // backwardEuler direct-CRS path and the verification helpers.
+   private void addStiffnessDeviceValues (
+      CuDssSolver cudss, MechSystem.GpuAssemblyContext ctx) {
+
+      cudss.addDeviceValues (
+         ctx.getCrsValueContributionSlots(),
+         ctx.getCrsValueContributions(),
+         ctx.numCrsValueContributions(), 1.0);
+      cudss.addScaledDiagonal3DeviceValues (
+         ctx.getScaledDiagonal3ContributionSlots(),
+         ctx.getScaledDiagonal3Contributions(),
+         ctx.numScaledDiagonal3Contributions(), 1.0);
+      cudss.addScaledBlock3DeviceValues (
+         ctx.getScaledBlock3ContributionSlots(),
+         ctx.getScaledBlock3Contributions(),
+         ctx.getScaledBlock3ContributionScales(),
+         ctx.numScaledBlock3Contributions(), 1.0);
+      cudss.addMaterialStiffness3DeviceValues (
+         ctx.getMaterialStiffness3ContributionSlots(),
+         ctx.getMaterialStiffness3Gis(),
+         ctx.getMaterialStiffness3Gjs(),
+         ctx.getMaterialStiffness3Ds(),
+         ctx.getMaterialStiffness3Sigmas(),
+         ctx.getMaterialStiffness3Dvs(),
+         ctx.numMaterialStiffness3Contributions(), 1.0);
+      cudss.addMaterialStiffness3ElementDeviceValues (
+         ctx.getMaterialStiffness3ElementNodeCounts(),
+         ctx.getMaterialStiffness3ElementPairOffsets(),
+         ctx.getMaterialStiffness3ElementIpOffsets(),
+         ctx.getMaterialStiffness3ElementGradOffsets(),
+         ctx.getMaterialStiffness3ElementPairNodeIdxs(),
+         ctx.getMaterialStiffness3ElementBlockSlots(),
+         ctx.getMaterialStiffness3ElementGrads(),
+         ctx.getMaterialStiffness3ElementDs(),
+         ctx.getMaterialStiffness3ElementSigmas(),
+         ctx.getMaterialStiffness3ElementDvs(),
+         ctx.numMaterialStiffness3ElementContributions(), 1.0);
+      cudss.addLinearElasticStiffness3ElementDeviceValues (
+         ctx.getLinearElasticStiffness3ElementNodeCounts(),
+         ctx.getLinearElasticStiffness3ElementPairOffsets(),
+         ctx.getLinearElasticStiffness3ElementIpOffsets(),
+         ctx.getLinearElasticStiffness3ElementGradOffsets(),
+         ctx.getLinearElasticStiffness3ElementPairNodeIdxs(),
+         ctx.getLinearElasticStiffness3ElementBlockSlots(),
+         ctx.getLinearElasticStiffness3ElementParams(),
+         ctx.getLinearElasticStiffness3ElementGrads(),
+         ctx.getLinearElasticStiffness3ElementDvs(),
+         ctx.numLinearElasticStiffness3ElementContributions(), 1.0);
+      cudss.addLinearElasticStiffness3ElementGeometryDeviceValues (
+         ctx.getLinearElasticStiffness3ElementGeometryNodeCounts(),
+         ctx.getLinearElasticStiffness3ElementGeometryNodeOffsets(),
+         ctx.getLinearElasticStiffness3ElementGeometryPairOffsets(),
+         ctx.getLinearElasticStiffness3ElementGeometryIpOffsets(),
+         ctx.getLinearElasticStiffness3ElementGeometryNaturalGradOffsets(),
+         ctx.getLinearElasticStiffness3ElementGeometryPairNodeIdxs(),
+         ctx.getLinearElasticStiffness3ElementGeometryBlockSlots(),
+         ctx.getLinearElasticStiffness3ElementGeometryParams(),
+         ctx.getLinearElasticStiffness3ElementGeometryNodePositions(),
+         ctx.getLinearElasticStiffness3ElementGeometryNaturalGrads(),
+         ctx.getLinearElasticStiffness3ElementGeometryIpWeights(),
+         ctx.numLinearElasticStiffness3ElementGeometryContributions(), 1.0);
+      cudss.addDilationalStiffness3ElementDeviceValues (
+         ctx.getDilationalStiffness3ElementNodeCounts(),
+         ctx.getDilationalStiffness3ElementPressureCounts(),
+         ctx.getDilationalStiffness3ElementPairOffsets(),
+         ctx.getDilationalStiffness3ElementConstraintOffsets(),
+         ctx.getDilationalStiffness3ElementRinvOffsets(),
+         ctx.getDilationalStiffness3ElementPairNodeIdxs(),
+         ctx.getDilationalStiffness3ElementBlockSlots(),
+         ctx.getDilationalStiffness3ElementConstraints(),
+         ctx.getDilationalStiffness3ElementRinvs(),
+         ctx.numDilationalStiffness3ElementContributions(), 1.0);
+   }
+
+   // Verifies the KKT M-block GPU assembly. The constrained (KKT) path factors
+   // its M block from the same contribution descriptors as backwardEuler, but
+   // scatters them through the KKT M-block slot map (getKktMBlockSlotMap). Here
+   // we re-assemble those contributions standalone on a scratch cuDSS solver
+   // (using the M-block CRS structure), read them back, and compare against a
+   // CPU reference assembled into the same ordering, catching both a §8c-class
+   // marshalling bug and an M-block slot-map error. Isolated: it does not touch
+   // the live KKT solve.
+   private void verifyKktMDeviceCrsValues (
+      MechSystem.GpuAssemblyContext ctx, double a0, double a1, String phase) {
+
+      int[] rowOffs = ctx.getZeroBasedCrsRowOffs();
+      int n = rowOffs.length - 1;
+      int nnz = ctx.getCrsValues().length;
+
+      double[] gpuVals = new double[nnz];
+      CuDssSolver scratch = new CuDssSolver();
+      try {
+         scratch.analyze (
+            new double[nnz], ctx.getZeroBasedCrsColIdxs(), rowOffs,
+            n, Matrix.INDEFINITE);
+         scratch.clearDeviceValues();
+         addStiffnessDeviceValues (scratch, ctx);
+         scratch.getDeviceValues (gpuVals);
+      }
+      finally {
+         scratch.dispose();
+      }
+
+      // CPU reference into the context's own CRS value array, same scales (a0
+      // for the velocity Jacobian, a1 for the position Jacobian) plus mass.
+      ctx.clearCrsValues();
+      boolean complete = true;
+      if (a0 != 0 && a1 != 0) {
+         complete &= mySys.assembleGpuVelJacobianCrsValues (ctx, a0);
+         complete &= mySys.assembleGpuPosJacobianCrsValues (ctx, a1);
+      }
+      complete &= addActiveMassMatrixCrsValues (ctx);
+      if (!complete) {
+         maybeWarnGpuAssemblyCrsVerifyIncomplete (phase);
+         return;
+      }
+      checkDeviceCrsMatch (phase, gpuVals, ctx.getCrsValues());
    }
 
    private boolean verifyGpuVelJacobianCrs (double h, String phase) {
@@ -1990,79 +2119,7 @@ public class MechSystemSolver {
                      "backwardEuler", directCrsContext);
                   CuDssSolver cudss = (CuDssSolver)myDirectSolver;
                   cudss.clearDeviceValues();
-                  cudss.addDeviceValues (
-                     directCrsContext.getCrsValueContributionSlots(),
-                     directCrsContext.getCrsValueContributions(),
-                     directCrsContext.numCrsValueContributions(), 1.0);
-                  cudss.addScaledDiagonal3DeviceValues (
-                     directCrsContext.getScaledDiagonal3ContributionSlots(),
-                     directCrsContext.getScaledDiagonal3Contributions(),
-                     directCrsContext.numScaledDiagonal3Contributions(), 1.0);
-                  cudss.addScaledBlock3DeviceValues (
-                     directCrsContext.getScaledBlock3ContributionSlots(),
-                     directCrsContext.getScaledBlock3Contributions(),
-                     directCrsContext.getScaledBlock3ContributionScales(),
-                     directCrsContext.numScaledBlock3Contributions(), 1.0);
-                  cudss.addMaterialStiffness3DeviceValues (
-                     directCrsContext.getMaterialStiffness3ContributionSlots(),
-                     directCrsContext.getMaterialStiffness3Gis(),
-                     directCrsContext.getMaterialStiffness3Gjs(),
-                     directCrsContext.getMaterialStiffness3Ds(),
-                     directCrsContext.getMaterialStiffness3Sigmas(),
-                     directCrsContext.getMaterialStiffness3Dvs(),
-                     directCrsContext.numMaterialStiffness3Contributions(),
-                     1.0);
-                  cudss.addMaterialStiffness3ElementDeviceValues (
-                     directCrsContext.getMaterialStiffness3ElementNodeCounts(),
-                     directCrsContext.getMaterialStiffness3ElementPairOffsets(),
-                     directCrsContext.getMaterialStiffness3ElementIpOffsets(),
-                     directCrsContext.getMaterialStiffness3ElementGradOffsets(),
-                     directCrsContext.getMaterialStiffness3ElementPairNodeIdxs(),
-                     directCrsContext.getMaterialStiffness3ElementBlockSlots(),
-                     directCrsContext.getMaterialStiffness3ElementGrads(),
-                     directCrsContext.getMaterialStiffness3ElementDs(),
-                     directCrsContext.getMaterialStiffness3ElementSigmas(),
-                     directCrsContext.getMaterialStiffness3ElementDvs(),
-                     directCrsContext.numMaterialStiffness3ElementContributions(),
-                     1.0);
-                  cudss.addLinearElasticStiffness3ElementDeviceValues (
-                     directCrsContext.getLinearElasticStiffness3ElementNodeCounts(),
-                     directCrsContext.getLinearElasticStiffness3ElementPairOffsets(),
-                     directCrsContext.getLinearElasticStiffness3ElementIpOffsets(),
-                     directCrsContext.getLinearElasticStiffness3ElementGradOffsets(),
-                     directCrsContext.getLinearElasticStiffness3ElementPairNodeIdxs(),
-                     directCrsContext.getLinearElasticStiffness3ElementBlockSlots(),
-                     directCrsContext.getLinearElasticStiffness3ElementParams(),
-                     directCrsContext.getLinearElasticStiffness3ElementGrads(),
-                     directCrsContext.getLinearElasticStiffness3ElementDvs(),
-                     directCrsContext.numLinearElasticStiffness3ElementContributions(),
-                     1.0);
-                  cudss.addLinearElasticStiffness3ElementGeometryDeviceValues (
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryNodeCounts(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryNodeOffsets(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryPairOffsets(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryIpOffsets(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryNaturalGradOffsets(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryPairNodeIdxs(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryBlockSlots(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryParams(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryNodePositions(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryNaturalGrads(),
-                     directCrsContext.getLinearElasticStiffness3ElementGeometryIpWeights(),
-                     directCrsContext.numLinearElasticStiffness3ElementGeometryContributions(),
-                     1.0);
-                  cudss.addDilationalStiffness3ElementDeviceValues (
-                     directCrsContext.getDilationalStiffness3ElementNodeCounts(),
-                     directCrsContext.getDilationalStiffness3ElementPressureCounts(),
-                     directCrsContext.getDilationalStiffness3ElementPairOffsets(),
-                     directCrsContext.getDilationalStiffness3ElementConstraintOffsets(),
-                     directCrsContext.getDilationalStiffness3ElementRinvOffsets(),
-                     directCrsContext.getDilationalStiffness3ElementPairNodeIdxs(),
-                     directCrsContext.getDilationalStiffness3ElementBlockSlots(),
-                     directCrsContext.getDilationalStiffness3ElementConstraints(),
-                     directCrsContext.getDilationalStiffness3ElementRinvs(),
-                     directCrsContext.numDilationalStiffness3ElementContributions(),
-                     1.0);
+                  addStiffnessDeviceValues (cudss, directCrsContext);
                   if (verifyGpuAssemblyCrs) {
                      verifyGpuDeviceCrsValues (
                         cudss, directCrsContext, h, "backwardEuler");
@@ -2797,6 +2854,10 @@ public class MechSystemSolver {
             MechSystem.GpuAssemblyContext kktMDeviceContext =
                createKktMDeviceContributionContext (
                   myKKTSolver, S, velSize, a0, a1);
+            if (verifyGpuAssemblyCrs && kktMDeviceContext != null) {
+               verifyKktMDeviceCrsValues (
+                  kktMDeviceContext, a0, a1, "kktFactor");
+            }
             if (myHybridSolveP && !analyze && myNT.colSize() == 0) {
                if (profileKKTSolveTime|profileImplicitFriction) {
                   timerStart (myKKTTimer);
