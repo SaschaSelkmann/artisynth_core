@@ -353,8 +353,44 @@ Verified both ways:
 
 This now guards the whole device assembly (marshalling + kernels) for ANY future
 material/element kernel: enable the two flags in a GPU CI run and a §8c-class bug
-fails immediately instead of silently corrupting the solve. Currently wired for
-the `backwardEuler` integrator path only (the KKT/constrained path is separate).
+fails immediately instead of silently corrupting the solve.
+
+## 14. KKT-path verify + second bug (rest vs current positions) (2026-06-07)
+
+Extended the device verifyCrs net to the constrained (ConstrainedBackwardEuler /
+KKT) integrator path. The KKT solve factors its M block from the same
+contribution descriptors as backwardEuler but scatters them through the KKT
+M-block slot map (`getKktMBlockSlotMap`). `MechSystemSolver.verifyKktMDeviceCrsValues`
+re-assembles those contributions standalone on a scratch cuDSS solver (M-block
+CRS structure), reads them back, and compares to a CPU reference in the same
+ordering — catching both a §8c-class marshalling bug and an M-block slot-map
+error, without touching the live KKT solve. Runs per kktFactor step when
+`-Dartisynth.gpuAssembly.kktDeviceValues` + `-Dartisynth.gpuAssembly.verifyCrs`
+are set. The 8-call device dispatch was extracted to a shared helper
+`addStiffnessDeviceValues` (used by the backwardEuler path and both verifiers).
+
+**Second real bug found by this (multi-step):** the linear-elastic GEOMETRY
+kernel marshalling built `elemNodePositions` from `getLocalPosition()` (the
+CURRENT, deformed positions). Non-corotated linear stiffness is evaluated at the
+REST configuration (it is constant), so the device stiffness DRIFTED as the mesh
+deformed — perfect at step 1 (rest==current), diverging thereafter (the KKT
+verify showed mismatches growing 0 -> 954 -> 1021, maxErr 1e-2 over steps). Fix:
+use `getRestPosition()` (FemModel3d.addLinearElasticStiffness3CrsValueContributions).
+After the fix the KKT verify holds at maxErr ~2e-14 across all steps. This is why
+the single-step `testBackwardEulerLinearElasticEquivalence` missed it — a proper
+multi-step assembly guard belongs in the CI verify task.
+
+**Third finding, OPEN (not yet fixed):** a multi-step cuDSS-device vs Pardiso
+BACKWARD-EULER behavioural comparison still diverges (~11% after 6 steps) even
+though `verifyGpuDeviceCrsValues` passes every step (the assembled MATRIX is
+correct). So the divergence is in the directCrs RHS, not the stiffness. Prime
+suspect: `directCrsVelValues = directCrsContext.getCrsValues().clone()` is taken
+right after the *Contributions* assembly, but the contribution methods (e.g.
+`addScaledBlock3CrsValueContribution`) only fill the descriptor arrays, NOT the
+context's CRS value array — so `directCrsVelValues` is likely all zeros and the
+`mulAddCrsValues(myB, myU, ...)` J*v term is missing. Harmless at step 1 (v=0),
+wrong once velocity builds up. Needs confirmation + fix; the linear behavioural
+test is kept single-step until then.
 
 Gotcha discovered: `corotated` is an **inherited** property
 (`LinearMaterialBase`, default `PropertyMode.Inherited`); constructing
