@@ -380,6 +380,43 @@ After the fix the KKT verify holds at maxErr ~2e-14 across all steps. This is wh
 the single-step `testBackwardEulerLinearElasticEquivalence` missed it — a proper
 multi-step assembly guard belongs in the CI verify task.
 
+## 18. Free rigid bodies on the GPU; joints/FEM-body coupling assessment (2026-06-07)
+
+Investigating "joints (FrameSpring) + active rigid bodies / active-master
+attachments" revealed that both reduce to 6-DOF frames in the GPU assembly:
+
+- **Frame MASS already works**: `addMassBlockToCrsValueContributions` falls back
+  to the generic `addBlockToCrsValueContributions`, which scatters ANY block size
+  entry-by-entry via `context.addCrsValueContribution(slot, value)`.
+- **Frame force-effector hooks (DONE)**: a frame's position Jacobian is empty
+  (gravity is constant); its velocity Jacobian is the frame/rotary damping on the
+  6x6 diagonal. `Frame` now overrides the four GPU hooks accordingly (damping via
+  the generic per-entry path; `*Values` write only the CPU CRS reference). A FEM
+  beam plus a FREE rigid body (with damping) now assembles on the device
+  (`generic=12` = 6 mass + 6 damping diagonal entries) and verifyCrs holds across
+  6 steps; new test `testBackwardEulerFreeBodyEquivalence` matches Pardiso ~9e-16.
+
+**FrameSpring (body-body, point 1): deferred, low value.** Its 6x6 Jacobian is
+computed-and-added in one fused helper (would need a parallel compute+scatter),
+and rigid bodies are cheap on CPU (the plan deliberately left them there). It
+unlocks no FEM model, so the cost/benefit is poor; the same generic-scatter
+pattern applies if it is ever wanted.
+
+**FEM coupled to an ACTIVE rigid body (point 2, the valuable case): needs the
+attachment reduction — the plan's deferred hard piece.** Coupling FEM to a moving
+body always goes through an attachment (FEM node or FrameMarker -> frame). The CPU
+handles this two ways that the GPU path does not: (a) the FEM creates INDIRECT
+neighbors carrying the attachment-transformed coupling, assembled by the neighbor
+loop but skipped by the geometry kernel (and the linear-elastic gate bails on
+`hasIndirectGpuAssemblyContributions`); (b) `MechSystemBase.addAttachmentJacobian`
+reduces slave blocks onto active master DOFs (`G^T K G`) on the fully assembled
+block matrix. Doing this on the device CRS means either a per-element split
+(GPU-assemble non-attached elements, CPU-scatter the indirect/reduced
+contributions for attached ones) or reimplementing the reduction as CRS
+contributions — a substantial, correctness-critical feature, not a mirror like the
+spring. Recommended as a dedicated effort. Debug runners: `gpudebug/FreeBodyRunner`,
+`gpudebug/AttachStepRunner` ("dynamic" = the active-master case that still bails).
+
 ## 17. First non-FEM force effector on the GPU: AxialSpring / Muscle (2026-06-07)
 
 Until now only `FemModel3d` provided GPU CRS contributions; every other force
