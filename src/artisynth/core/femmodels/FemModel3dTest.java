@@ -1048,6 +1048,67 @@ public class FemModel3dTest extends UnitTest {
          "FEM+free-body GPU equivalence ok: max="+max+" (ref="+ref+")");
    }
 
+   // Steps a BigBeam3d-like model: a non-corotated linear FEM beam whose two end
+   // faces are attached to FIXED rigid blocks, under the ConstrainedBackwardEuler
+   // (KKT) integrator. With cuDSS this exercises the KKT M-block device assembly
+   // (on by default), which is exactly BigBeam3d's path. Unlike the directCrs
+   // tests this needs no system property, so it runs in the default suite.
+   private double[] runConstrainedStep (
+      maspack.solvers.SparseSolverId solverId) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+
+      MechModel mech = new MechModel();
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      RigidBody left = RigidBody.createBox ("left", 0.1, 0.5, 0.5, 1000);
+      left.setPose (new RigidTransform3d (-0.55, 0, 0));
+      left.setDynamic (false);
+      mech.addRigidBody (left);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            mech.attachPoint (node, left);
+         }
+      }
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testConstrainedBackwardEulerEquivalence() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;   // cuDSS not present; nothing GPU-specific to check
+      }
+      double[] gpu = runConstrainedStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu =
+         runConstrainedStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-8, 1e-6*ref);
+      if (max > tol) {
+         throw new TestException (
+            "ConstrainedBackwardEuler cuDSS vs Pardiso velocity mismatch: "+
+            "max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "constrained (KKT) cuDSS equivalence ok: max="+max+" (ref="+ref+")");
+   }
+
    void checkNumbering (FemModel3d fem, boolean zeroBased) {
       int inc = zeroBased ? 0 : 1;
       for (int i=0; i< fem.numNodes(); i++) {
@@ -1121,6 +1182,7 @@ public class FemModel3dTest extends UnitTest {
       testBackwardEulerFixedAttachmentEquivalence();
       testBackwardEulerSpringEquivalence();
       testBackwardEulerFreeBodyEquivalence();
+      testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();
       testSetNumbering();
       testFemCopy();
