@@ -380,6 +380,30 @@ After the fix the KKT verify holds at maxErr ~2e-14 across all steps. This is wh
 the single-step `testBackwardEulerLinearElasticEquivalence` missed it — a proper
 multi-step assembly guard belongs in the CI verify task.
 
+## 17. First non-FEM force effector on the GPU: AxialSpring / Muscle (2026-06-07)
+
+Until now only `FemModel3d` provided GPU CRS contributions; every other force
+effector used the default `ForceEffector.assemble*CrsValue*` (returns false), so
+any model with a spring/muscle/joint bailed to CPU. `AxialSpring` now overrides
+all four hooks (pos/vel × Contributions/Values). A spring segment contributes a
+3x3 matrix T to four blocks (+T on the (0,0)/(1,1) diagonal blocks, -T on the
+(0,1)/(1,0) off-diagonals); the new `SegmentData.addToJacobianCrs` mirrors the
+existing `addToJacobianBlocks` into a context, emitting device scaledBlock3
+contributions (`asValues=false`) or writing the CPU CRS reference used by the
+J*v term / verifyCrs (`asValues=true`, which must NOT also emit descriptors or
+the device would double-count). Because `Muscle extends AxialSpring`, muscles are
+covered too.
+
+Verified: a FEM beam with a damped AxialSpring between two free nodes assembles
+on the device (`deviceCrs=true`, status shows `block3=8` for the spring's pos+vel
+blocks alongside the FEM `linearGeomElem3`), verifyCrs holds across 6 steps, and
+the new `testBackwardEulerSpringEquivalence` matches Pardiso to ~1e-15.
+
+Still on CPU: MultiPointSpring/MultiPointMuscle (multiple segments), joints,
+particles, contact, and active rigid bodies — each needs its own GPU contribution
+hooks (same mechanical pattern as the spring). Debug runner:
+`gpudebug/SpringStepRunner`.
+
 ## 16. Perf measurement: the GPU path barely wins yet (2026-06-07)
 
 Measured a pure non-corotated linear tet beam, BackwardEuler + cuDSS, on a
