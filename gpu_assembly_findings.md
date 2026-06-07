@@ -380,6 +380,40 @@ After the fix the KKT verify holds at maxErr ~2e-14 across all steps. This is wh
 the single-step `testBackwardEulerLinearElasticEquivalence` missed it — a proper
 multi-step assembly guard belongs in the CI verify task.
 
+## 15. Attachments to fixed masters now use the GPU path (2026-06-07)
+
+Previously ANY attachment disabled the device assembly:
+`MechSystemBase.assembleGpu*CrsValue*` bailed if `hasAttachmentJacobianContributions()`
+(just "are there any attachments?") OR if any force effector returned false
+(the default `ForceEffector.assemble*CrsValue*` returns false; a rigid body uses
+that default). So a FEM beam pinned to a frame via attachments fell back to CPU.
+
+Two refinements (both correctness-preserving; verified by the per-step device
+verifyCrs and a behavioural test):
+
+1. `hasAttachmentJacobianContributions()` now returns true only when an
+   attachment has an ACTIVE master. The reduction (`addAttachmentJacobian`)
+   transfers slave stiffness onto active master DOFs; an attachment to a fixed
+   (inactive) master behaves exactly like a fixed slave node, which the FEM
+   kernels already handle by skipping solve-index -1. So fixed-master
+   attachments no longer disable the device path.
+2. The force-effector loops skip non-active dynamic components
+   (`skipGpuForceEffector`): a fixed rigid body contributes nothing to the
+   active-DOF Jacobian, so its default "unsupported" return must not bail the
+   assembly. (FemModel3d is not a DynamicComponent, so it is never skipped.)
+
+Result: a FEM model whose face is ATTACHED to a fixed frame (a common boundary
+condition) now assembles on the GPU. Verified: `directCrsStatus=deviceValues`
+with the kernels firing, verifyCrs holds across 6 steps, and a new test
+`testBackwardEulerFixedAttachmentEquivalence` matches Pardiso to ~9e-16.
+
+Still on CPU (correct fallback): attachments to ACTIVE masters (e.g. a FEM node
+attached to a free rigid body) — the GPU reduction onto active master DOFs is
+not yet implemented, so `incompleteContributions` and CPU fallback. That (and
+non-FEM force effectors providing GPU contributions) is the next coverage step
+for real models. Debug runner: `gpudebug/AttachStepRunner` ("dynamic" arg for
+the active-master case).
+
 **Third real bug, FIXED:** a multi-step cuDSS-device vs Pardiso backward-euler
 behavioural comparison diverged (~11% after 6 steps) even though
 `verifyGpuDeviceCrsValues` passed every step (the assembled MATRIX is correct) —
