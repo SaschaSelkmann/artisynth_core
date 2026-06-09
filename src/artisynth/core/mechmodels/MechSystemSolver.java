@@ -116,6 +116,15 @@ public class MechSystemSolver {
    private int myGpuAssemblyContextColSize = -1;
    private MechSystem.GpuAssemblyContext myGpuAssemblyContext = null;
 
+   // Cached scratch cuDSS solver + context (M-block pattern) used to evaluate
+   // the KKT velocity/position-Jacobian RHS term (a2*df/dv + a3*df/dx)*vel0 on
+   // the GPU, so the host never assembles that Jacobian. Rebuilt on a solve
+   // matrix structure change.
+   private MechSystem.GpuAssemblyContext myKktVelJacRhsContext = null;
+   private CuDssSolver myKktVelJacRhsSolver = null;
+   private int myKktVelJacRhsVersion = -1;
+   private boolean myKktVelJacRhsAnalyzed = false;
+
    // mass matrix stuff
 
    private int myMassVersion = -1;
@@ -1536,6 +1545,77 @@ public class MechSystemSolver {
          ctx.numDilationalStiffness3ElementContributions(), 1.0);
    }
 
+   // Evaluates the KKT velocity/position-Jacobian RHS term
+   //    bf += (a2*df/dv + a3*df/dx)*vel0
+   // entirely on the GPU, returning true on success. The combined Jacobian
+   // a2*J_v + a3*J_p is assembled into a dedicated device value buffer (M-block
+   // pattern) on a cached scratch cuDSS solver, then multiplied by vel0 via the
+   // device SpMV. This replaces the host velocity/position-Jacobian assembly
+   // into S and the host S.mul(vel0) terms, so the stiffness Jacobian stays on
+   // the device. Returns false (leaving bf unchanged) if the Jacobian
+   // contributions cannot be fully assembled on the device (e.g. active-master
+   // attachments), so the caller can fall back to host assembly.
+   //
+   // The caller must guarantee that the KKT factor will use the device M
+   // contributions (so S's M-block values are unused) and that there are no
+   // parametric components (whose fictitious Jacobian forces the GPU
+   // contribution path does not compute).
+   private boolean addDeviceKktVelJacobianRhs (
+      VectorNd bf, VectorNd vel0, int velSize, double a2, double a3) {
+
+      if (myKktVelJacRhsContext == null ||
+          myKktVelJacRhsVersion != mySolveMatrixVersion) {
+         SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+            mySolveMatrix.createCrsBlockSlotMap (
+               Matrix.Partition.Full, velSize, velSize);
+         myKktVelJacRhsContext =
+            new MechSystem.GpuAssemblyContext (
+               mySolveMatrix, slotMap, mySolveMatrixVersion);
+         if (myKktVelJacRhsSolver != null) {
+            myKktVelJacRhsSolver.dispose();
+         }
+         myKktVelJacRhsSolver = new CuDssSolver();
+         myKktVelJacRhsVersion = mySolveMatrixVersion;
+         myKktVelJacRhsAnalyzed = false;
+      }
+      MechSystem.GpuAssemblyContext ctx = myKktVelJacRhsContext;
+      ctx.clearCrsValues();
+      ctx.clearCrsValueContributions();
+      // Assemble the combined RHS Jacobian a2*df/dv + a3*df/dx. Both the
+      // velocity and position Jacobians are assembled (even when a coefficient
+      // is zero) so that this completeness check matches exactly the one in
+      // createKktMDeviceContributionContext: only if BOTH assemble fully on the
+      // device will the KKT M block be factored from device contributions, and
+      // only then is it safe for the caller to have skipped the host assembly
+      // of S's M block.
+      boolean complete = true;
+      complete &=
+         mySys.assembleGpuVelJacobianCrsValueContributions (ctx, null, a2);
+      complete &=
+         mySys.assembleGpuPosJacobianCrsValueContributions (ctx, null, a3);
+      if (!complete) {
+         return false;
+      }
+      if (!myKktVelJacRhsAnalyzed) {
+         int nnz = ctx.getCrsValues().length;
+         myKktVelJacRhsSolver.analyze (
+            new double[nnz], ctx.getZeroBasedCrsColIdxs(),
+            ctx.getZeroBasedCrsRowOffs(), velSize, Matrix.INDEFINITE);
+         myKktVelJacRhsAnalyzed = true;
+      }
+      myKktVelJacRhsSolver.clearDeviceValues();
+      addStiffnessDeviceValues (myKktVelJacRhsSolver, ctx);
+      double[] in = new double[velSize];
+      double[] out = new double[velSize];
+      System.arraycopy (vel0.getBuffer(), 0, in, 0, velSize);
+      myKktVelJacRhsSolver.multiply (in, out);
+      double[] bbuf = bf.getBuffer();
+      for (int i=0; i<velSize; i++) {
+         bbuf[i] += out[i];
+      }
+      return true;
+   }
+
    // Verifies the KKT M-block GPU assembly. The constrained (KKT) path factors
    // its M block from the same contribution descriptors as backwardEuler, but
    // scatters them through the KKT M-block slot map (getKktMBlockSlotMap). Here
@@ -1827,24 +1907,6 @@ public class MechSystemSolver {
       return false;
    }
 
-   private void mulAddCrsValues (
-      VectorNd y, VectorNd x, MechSystem.GpuAssemblyContext context,
-      double[] crsValues) {
-
-      int nrows = context.getSlotMap().rowSize();
-      int[] rowOffs = context.getZeroBasedCrsRowOffs();
-      int[] colIdxs = context.getZeroBasedCrsColIdxs();
-      double[] ybuf = y.getBuffer();
-      double[] xbuf = x.getBuffer();
-      for (int i=0; i<nrows; i++) {
-         double sum = 0;
-         for (int k=rowOffs[i]; k<rowOffs[i+1]; k++) {
-            sum += crsValues[k]*xbuf[colIdxs[k]];
-         }
-         ybuf[i] += sum;
-      }
-   }
-
    // begin timing code for the solver
    FunctionTimer factorTimer = new FunctionTimer();
    FunctionTimer solveTimer = new FunctionTimer();
@@ -1946,7 +2008,7 @@ public class MechSystemSolver {
       boolean directCrsMatrixReady = false;
       boolean directCrsDeviceValuesReady = false;
       boolean crsVerified = false;
-      double[] directCrsVelValues = null;
+      MechSystem.GpuAssemblyContext directCrsVelJacContext = null;
       VectorNd directCrsVelForces = null;
       VectorNd directCrsPosForces = null;
       boolean gpuVel = false;
@@ -1967,19 +2029,25 @@ public class MechSystemSolver {
          myC.setZero();
          if (mySys.assembleGpuVelJacobianCrsValueContributions (
                 directCrsContext, myC, -h)) {
-            // The element-kernel contribution builders (linear-elastic,
-            // material3, dilational) fill only their device descriptor arrays,
-            // not the context's CPU CRS value array, so getCrsValues() is
-            // missing those stiffness terms here. The J*v term below
-            // (mulAddCrsValues) needs the COMPLETE velocity Jacobian on the
-            // host, so assemble it via the neighbor-based CPU path. The device
-            // descriptors are stored separately and are unaffected.
-            directCrsContext.clearCrsValues();
-            mySys.assembleGpuVelJacobianCrsValues (directCrsContext, -h);
-            directCrsVelValues = directCrsContext.getCrsValues().clone();
             if (useFictitousJacobianForces) {
                directCrsVelForces = new VectorNd (myC);
             }
+            // Build a velocity-Jacobian-only device context (sharing the solve
+            // matrix slot map). At this point directCrsContext holds ONLY the
+            // velocity-Jacobian contributions (position Jacobian and mass are
+            // added below), but they accumulate into one context, so we capture
+            // J_v separately here to evaluate the J*v RHS term on the GPU (the
+            // device SpMV in the factor block). This replaces the former host
+            // velocity-Jacobian CRS assembly + host SpMV, so the host no longer
+            // assembles J_v and never needs the stiffness for the J*v term.
+            directCrsVelJacContext =
+               new MechSystem.GpuAssemblyContext (
+                  mySolveMatrix, directCrsContext.getSlotMap(),
+                  mySolveMatrixVersion);
+            directCrsVelJacContext.clearCrsValues();
+            directCrsVelJacContext.clearCrsValueContributions();
+            mySys.assembleGpuVelJacobianCrsValueContributions (
+               directCrsVelJacContext, null, -h);
             myC.setZero();
             if (mySys.assembleGpuPosJacobianCrsValueContributions (
                    directCrsContext, myC, -h * h)) {
@@ -2021,13 +2089,12 @@ public class MechSystemSolver {
       //System.out.println ("SV=\n" + S.toString("%g"));
 
       // b += Jv v
-      if (directCrsMatrixReady) {
-         mulAddCrsValues (
-            myB, myU, directCrsContext, directCrsVelValues);
-      }
-      else {
+      if (!directCrsMatrixReady) {
          mySolveMatrix.mulAdd (myB, myU, vsize, vsize);
       }
+      // For the device-CRS path the J_v*v term is evaluated on the GPU in the
+      // factor block below (assembleVelJac + device SpMV), after the matrix has
+      // been analyzed, and added directly to myB there.
       long tMulJv = myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
 
       if (!directCrsMatrixReady) {
@@ -2127,6 +2194,23 @@ public class MechSystemSolver {
                   requireFullGpuAssembly (
                      "backwardEuler", directCrsContext);
                   CuDssSolver cudss = (CuDssSolver)myDirectSolver;
+                  // Evaluate the velocity-Jacobian RHS term (-h*J_v)*v on the
+                  // device: assemble J_v alone into the device value buffer,
+                  // multiply by the current velocity, and add the result to the
+                  // RHS. The matrix is wiped and reassembled in full just below
+                  // before the factor.
+                  if (directCrsVelJacContext != null) {
+                     cudss.clearDeviceValues();
+                     addStiffnessDeviceValues (cudss, directCrsVelJacContext);
+                     double[] jvIn = new double[vsize];
+                     double[] jvOut = new double[vsize];
+                     System.arraycopy (myU.getBuffer(), 0, jvIn, 0, vsize);
+                     cudss.multiply (jvIn, jvOut);
+                     double[] bbuf = myB.getBuffer();
+                     for (int i=0; i<vsize; i++) {
+                        bbuf[i] += jvOut[i];
+                     }
+                  }
                   cudss.clearDeviceValues();
                   addStiffnessDeviceValues (cudss, directCrsContext);
                   if (verifyGpuAssemblyCrs) {
@@ -2624,53 +2708,95 @@ public class MechSystemSolver {
          myC.setSize (S.rowSize());
          myC.setZero();
 
-         gpuVel = addGpuVelJacobian (S, myC, a0, "KKT velocity Jacobian");
-         if (!gpuVel) {
-            mySys.addVelJacobian (S, myC, a0);
+         // Try to evaluate the velocity/position-Jacobian RHS term
+         // (a2*df/dv + a3*df/dx)*vel0 on the GPU. Eligible only when the KKT M
+         // block will be factored from device contributions (canFactorDeviceM
+         // Contributions, so the M-block values of S are unused by the factor)
+         // and there are no parametric components (whose fictitious Jacobian
+         // forces the GPU contribution path does not compute, and which are
+         // zero here). When eligible we skip the host velocity/position-
+         // Jacobian assembly into S entirely, keeping the stiffness Jacobian on
+         // the device. analyze steps fall back to the host path because the KKT
+         // M-block slot map is not yet available.
+         // Parametric velocities must be zero for the device path: a non-zero
+         // prescribed velocity contributes a fictitious force via the parametric
+         // coupling block of S (the S.mulTranspose(myUpar) term below) and via
+         // myC, neither of which the device path forms. A fixed (inactive) body
+         // is parametric but has zero velocity, so it stays eligible.
+         boolean parametricVelZero =
+            (myParametricVelSize == 0 || myUpar.infinityNorm() == 0);
+         boolean deviceVelJacRhs = false;
+         if (!analyze && vel0 != null && useFictitousJacobianForces &&
+             parametricVelZero && enableGpuAssembly() &&
+             myKKTSolver != null &&
+             myKKTSolver.canFactorDeviceMContributions()) {
+            deviceVelJacRhs =
+               addDeviceKktVelJacobianRhs (bf, vel0, velSize, a2, a3);
          }
-         // The old CPU-context velocity-Jacobian verify compares against the
-         // full KKT matrix; skip it when the velocity Jacobian fell back to CPU
-         // (gpuVel false), where there is no GPU assembly to check and the KKT
-         // constraint blocks would make the comparison spuriously fail. The
-         // real device check for the KKT M block is verifyKktMDeviceCrsValues.
-         crsVerified =
-            gpuVel && verifyGpuVelJacobianCrs (a0, "KKT velocity Jacobian");
-         tVelJac =
-            myGpuAssemblyProfilingEnabled ? System.nanoTime() : tVelJac;
-         if (useFictitousJacobianForces) {
-            bf.scaledAdd (-a0, myC);
-            if (fpar != null && myParametricVelSize > 0) {
-               setSubVector (fpar, myC, velSize, myParametricVelSize);
+         if (deviceVelJacRhs) {
+            // Stiffness RHS term applied on the device; fictitious Jacobian
+            // forces are zero (no parametric components). S's M-block velocity/
+            // position Jacobian is intentionally not assembled: the factor uses
+            // the device M contributions and getCRSValuesWithoutM() excludes
+            // the M block.
+            gpuVel = true;
+            gpuPos = true;
+            tVelJac =
+               myGpuAssemblyProfilingEnabled ? System.nanoTime() : tVelJac;
+            tMul = myGpuAssemblyProfilingEnabled ? System.nanoTime() : tMul;
+            tPosJac =
+               myGpuAssemblyProfilingEnabled ? System.nanoTime() : tPosJac;
+         }
+         else {
+            gpuVel = addGpuVelJacobian (S, myC, a0, "KKT velocity Jacobian");
+            if (!gpuVel) {
+               mySys.addVelJacobian (S, myC, a0);
             }
-         }
-         if (vel0 != null) {
-            double alpha = a2/a0 - a3/a1;
-            S.mul (btmp, vel0, velSize, velSize);
-            bf.scaledAdd (alpha, btmp);
-         }
-         tMul = myGpuAssemblyProfilingEnabled ? System.nanoTime() : tMul;
-         myC.setZero();
-         gpuPos = addGpuPosJacobian (S, myC, a1, "KKT position Jacobian");
-         if (!gpuPos) {
-            mySys.addPosJacobian (S, myC, a1);
-         }
-         if (crsVerified) {
-            crsVerified = verifyGpuPosJacobianCrs (
-               a1, "KKT position Jacobian", /*cumulative=*/true);
-         }
-         tPosJac =
-            myGpuAssemblyProfilingEnabled ? System.nanoTime() : tPosJac;
+            // The old CPU-context velocity-Jacobian verify compares against the
+            // full KKT matrix; skip it when the velocity Jacobian fell back to
+            // CPU (gpuVel false), where there is no GPU assembly to check and
+            // the KKT constraint blocks would make the comparison spuriously
+            // fail. The real device check for the KKT M block is
+            // verifyKktMDeviceCrsValues.
+            crsVerified =
+               gpuVel && verifyGpuVelJacobianCrs (a0, "KKT velocity Jacobian");
+            tVelJac =
+               myGpuAssemblyProfilingEnabled ? System.nanoTime() : tVelJac;
+            if (useFictitousJacobianForces) {
+               bf.scaledAdd (-a0, myC);
+               if (fpar != null && myParametricVelSize > 0) {
+                  setSubVector (fpar, myC, velSize, myParametricVelSize);
+               }
+            }
+            if (vel0 != null) {
+               double alpha = a2/a0 - a3/a1;
+               S.mul (btmp, vel0, velSize, velSize);
+               bf.scaledAdd (alpha, btmp);
+            }
+            tMul = myGpuAssemblyProfilingEnabled ? System.nanoTime() : tMul;
+            myC.setZero();
+            gpuPos = addGpuPosJacobian (S, myC, a1, "KKT position Jacobian");
+            if (!gpuPos) {
+               mySys.addPosJacobian (S, myC, a1);
+            }
+            if (crsVerified) {
+               crsVerified = verifyGpuPosJacobianCrs (
+                  a1, "KKT position Jacobian", /*cumulative=*/true);
+            }
+            tPosJac =
+               myGpuAssemblyProfilingEnabled ? System.nanoTime() : tPosJac;
 
-         if (useFictitousJacobianForces) {
-            bf.scaledAdd (-a0, myC);
-            if (fpar != null && myParametricVelSize > 0) {
-               addSubVector (fpar, myC, velSize, myParametricVelSize);
+            if (useFictitousJacobianForces) {
+               bf.scaledAdd (-a0, myC);
+               if (fpar != null && myParametricVelSize > 0) {
+                  addSubVector (fpar, myC, velSize, myParametricVelSize);
+               }
             }
-         }
-         if (vel0 != null && a3 != 0) {
-            double beta = a3/a1;
-            S.mul (btmp, vel0, velSize, velSize);
-            bf.scaledAdd (beta, btmp);
+            if (vel0 != null && a3 != 0) {
+               double beta = a3/a1;
+               S.mul (btmp, vel0, velSize, velSize);
+               bf.scaledAdd (beta, btmp);
+            }
          }
       }
 
@@ -5382,6 +5508,13 @@ public class MechSystemSolver {
       if (myCuDssSolver != null) {
          myCuDssSolver.dispose();
          myCuDssSolver = null;
+      }
+      if (myKktVelJacRhsSolver != null) {
+         myKktVelJacRhsSolver.dispose();
+         myKktVelJacRhsSolver = null;
+         myKktVelJacRhsContext = null;
+         myKktVelJacRhsVersion = -1;
+         myKktVelJacRhsAnalyzed = false;
       }
       if (myRBSolver != null) {
          myRBSolver.dispose();

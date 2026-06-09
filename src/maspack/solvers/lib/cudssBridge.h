@@ -132,6 +132,17 @@ public:
    // Copy b[] H->D, run CUDSS_PHASE_SOLVE, copy x[] D->H. Both arrays length n.
    int solve (const double* b, double* x);
 
+   // Device sparse matrix-vector product y = A*x, where A is the matrix
+   // currently resident in the device CSR values buffer (myValsD) over the
+   // analyzed pattern. Host x[] is copied H->D, the SpMV runs entirely on the
+   // device (via the same cuSPARSE machinery used by the BiCGStab path), and
+   // the result y[] is copied D->H. Both arrays length n. Used to evaluate the
+   // velocity-Jacobian J*v term on the GPU (assemble J_v into the device values
+   // buffer, then multiply by v) so the host never assembles J_v. For symmetric
+   // upper-only storage the same U + U^T - diag(U) reconstruction as applyA is
+   // used; for CUDSS_BRIDGE_MT_GENERAL a single SpMV suffices.
+   int multiply (const double* x, double* y);
+
    // Multi-RHS solve. B and X are column-major dense matrices of size n x nrhs
    // stored as contiguous host arrays of length n*nrhs. The bridge grows its
    // multi-RHS device buffers lazily; the first call with nrhs > 1 allocates

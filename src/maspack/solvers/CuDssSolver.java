@@ -126,6 +126,7 @@ public class CuDssSolver implements DirectSolver {
       double[] constraints, double[] rinvs, int nelems, double scale);
    private static native int    doFactorDeviceValues (long handle);
    private static native int    doSolve   (long handle, double[] b, double[] x);
+   private static native int    doMultiply (long handle, double[] x, double[] y);
    private static native int    doSolveMulti (
       long handle, int nrhs, double[] B, double[] X);
    private static native int    doIterativeSolve (
@@ -433,6 +434,29 @@ public class CuDssSolver implements DirectSolver {
          throw new ImproperStateException ("analyze() not previously called");
       }
       check (doGetDeviceValues (myHandle, vals), "getDeviceValues");
+   }
+
+   /**
+    * Computes the sparse matrix-vector product {@code y = A*x} on the device,
+    * where {@code A} is the matrix currently resident in the device-side CRS
+    * value buffer (as left by {@link #factor(double[])}, {@link #addDeviceValues}
+    * and friends, or {@link #clearDeviceValues}) over the analyzed pattern. The
+    * product is evaluated entirely on the GPU; {@code x} is copied host&rarr;device
+    * and the result is copied device&rarr;host into {@code y}.
+    *
+    * <p>This lets callers evaluate a Jacobian-vector term (e.g. the velocity
+    * Jacobian product {@code J_v*v}) on the GPU by assembling the relevant
+    * matrix into the device value buffer and multiplying, without ever forming
+    * the matrix on the host.
+    *
+    * @param x input vector, length equal to the matrix dimension
+    * @param y output vector, length equal to the matrix dimension
+    */
+   public synchronized void multiply (double[] x, double[] y) {
+      if (myState == UNSET) {
+         throw new ImproperStateException ("analyze() not previously called");
+      }
+      check (doMultiply (myHandle, x, y), "multiply");
    }
 
    /**

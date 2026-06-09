@@ -1334,6 +1334,41 @@ int CuDssBridge::solve (const double* b, double* x) {
    return CUDSS_BRIDGE_OK;
 }
 
+int CuDssBridge::multiply (const double* x, double* y) {
+   if (!myHasPattern || !myValsD) {
+      myLastErr = "multiply called before setPattern";
+      return CUDSS_BRIDGE_ERR_STATE;
+   }
+   // Lazily set up the cuSPARSE CSR descriptor (bound to myValsD) and the SpMV
+   // workspace; shared with the BiCGStab path. Cheap after the first call.
+   int st = ensureIterativeState();
+   if (st != CUDSS_BRIDGE_OK) {
+      return st;
+   }
+   const size_t vecBytes = (size_t)myN * sizeof(double);
+   // Reuse the solve b/x device vectors as SpMV in/out buffers.
+   if (!cudaOk (cudaMemcpyAsync (myBVecD, x, vecBytes,
+                                 cudaMemcpyHostToDevice, myStream))) {
+      myLastErr = "cudaMemcpyAsync failed copying multiply input";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   st = applyA (myBVecD, myXVecD);   // myXVecD = A * myBVecD
+   if (st != CUDSS_BRIDGE_OK) {
+      return st;
+   }
+   if (!cudaOk (cudaMemcpyAsync (y, myXVecD, vecBytes,
+                                 cudaMemcpyDeviceToHost, myStream))) {
+      myLastErr = "cudaMemcpyAsync failed copying multiply result";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   if (!cudaOk (cudaStreamSynchronize (myStream))) {
+      myLastErr = "cudaStreamSynchronize failed after multiply";
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   myLastErr = nullptr;
+   return CUDSS_BRIDGE_OK;
+}
+
 int CuDssBridge::solveMulti (int nrhs, const double* B, double* X) {
    if (!myFactored) {
       myLastErr = "solveMulti called before factor";

@@ -613,3 +613,52 @@ material is attached to the model. Must call
   routing actually switches to GPU-sourced values once the gate is satisfied.
 - Corotated default means most existing demos will silently stay on CPU — the
   GPU path's real-world coverage is currently near zero until step 3 above.
+
+## 20. Velocity-Jacobian J*v term moved onto the GPU (2026-06-09)
+
+The velocity-Jacobian RHS term (the "J*v" fictitious force in implicit
+integration) was the last assembly piece still computed on the CPU in both GPU
+paths. It is now evaluated on the device via a new real device SpMV.
+
+**New device SpMV.** `CuDssBridge::multiply(x,y)` computes `y = A*x` where A is the
+matrix currently in the device CRS values buffer (`myValsD`), reusing the cuSPARSE
+`applyA` + `ensureIterativeState` machinery from the BiCGStab path (single SpMV for
+the INDEFINITE/full pattern used here). Exposed through JNI `doMultiply` and
+`CuDssSolver.multiply(double[] x, double[] y)`. (Native lib rebuild needs
+JAVA_HOME=java-17 — java-21 has no javac — and CUDA_HOME=/usr/local/cuda, invoked
+from the repo root; see verify-commands.)
+
+**directCrs (plain BackwardEuler) path.** Removed the host velocity-Jacobian CRS
+assembly (`assembleGpuVelJacobianCrsValues`) and the host SpMV (`mulAddCrsValues`,
+deleted). Instead a velJac-only device context is assembled into `myValsD` and
+`multiply(v)` gives `(-h*J_v)*v`, added to the RHS, before the full matrix is
+reassembled and factored. The host no longer assembles J_v, so it no longer needs
+the stiffness for J*v. Validated: testBackwardEulerLinearElasticEquivalence 6e-16
+vs Pardiso (multi-step), verifyCrs clean.
+
+**KKT (ConstrainedBackwardEuler) path.** The RHS term `bf += (a2*df/dv +
+a3*df/dx)*vel0` is now formed as ONE device matrix `a2*J_v + a3*J_p` and ONE
+`multiply(vel0)` on a cached scratch CuDssSolver (M-block pattern), in the new
+helper `addDeviceKktVelJacobianRhs`. When eligible the host
+`addVelJacobian/addPosJacobian` into S is skipped entirely (the factor uses the
+device M contributions; `getCRSValuesWithoutM` excludes S's M-block values).
+Safe because: (1) the `fpar` output of KKTFactorAndSolve is dead (callers pass the
+never-read `myFparC`); (2) the active-DOF fictitious force `myC` is zero in the
+eligible case (no active-master attachments — same completeness gate as the M-block
+context); (3) the parametric-velocity coupling `S.mulTranspose(myUpar)` is zero iff
+`myUpar==0`. Guard: `!analyze && vel0!=null && parametricVelZero (myParametricVelSize
+==0 || myUpar.infinityNorm()==0) && canFactorDeviceMContributions()`. NOTE a FIXED
+rigid body is parametric (myParametricVelSize>0) but zero-velocity, so the myUpar
+check — not myParametricVelSize==0 — is what keeps BigBeam-class models eligible.
+This also removes the old "GPU assembly requested for KKT velocity Jacobian … using
+CPU assembly" fallback (it now only fires on the first/analyze step). Validated:
+testConstrainedBackwardEulerEquivalence 6e-16 vs Pardiso (device RHS confirmed
+engaging steps 2-6), BigBeam3d -matrixSolver CuDss under verifyCrs clean,
+KKTSolverTest/CuDssSolverTest/FemModel3dTest all pass.
+
+**Cost note.** Per KKT step velJac+posJac are now marshalled twice (the RHS context
+and the M-block context). Negligible vs the solve here and irrelevant on the target
+large-FP64 GPUs; a future optimization could share the marshalling. NEXT velJac-
+related work: none — the next GPU-coverage step is the attachment reduction
+(G^T K G onto ACTIVE master DOFs) which is what actually keeps moving-rigid-body +
+FEM on the GPU.

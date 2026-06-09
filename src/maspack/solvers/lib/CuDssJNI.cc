@@ -581,6 +581,24 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolve
    return (jint)status;
 }
 
+JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doMultiply
+  (JNIEnv* env, jclass /*cls*/, jlong handle, jdoubleArray x, jdoubleArray y) {
+   CuDssBridge* br = asBridge (handle);
+   if (!br) return CUDSS_BRIDGE_ERR_STATE;
+   jdouble* xP = env->GetDoubleArrayElements (x, nullptr);
+   jdouble* yP = env->GetDoubleArrayElements (y, nullptr);
+   if (!xP || !yP) {
+      if (xP) env->ReleaseDoubleArrayElements (x, xP, JNI_ABORT);
+      if (yP) env->ReleaseDoubleArrayElements (y, yP, JNI_ABORT);
+      return CUDSS_BRIDGE_ERR_CUDA_COPY;
+   }
+   int status = br->multiply ((const double*)xP, (double*)yP);
+   env->ReleaseDoubleArrayElements (x, xP, JNI_ABORT);
+   // commit the result vector back to Java only on success
+   env->ReleaseDoubleArrayElements (y, yP, (status == 0) ? 0 : JNI_ABORT);
+   return (jint)status;
+}
+
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doSolveMulti
   (JNIEnv* env, jclass /*cls*/, jlong handle, jint nrhs,
    jdoubleArray B, jdoubleArray X) {
