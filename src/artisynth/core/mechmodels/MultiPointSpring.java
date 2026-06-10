@@ -141,6 +141,18 @@ public class MultiPointSpring extends PointSpringBase
    // (false) vs the CPU CRS reference (true; used by the J*v / verifyCrs term).
    private transient MechSystem.GpuAssemblyContext myCrsContext = null;
    private transient boolean myCrsAsValues = false;
+   // GPU master-slave reduction (CRS path): for an endpoint attached to an
+   // ACTIVE frame (e.g. a FrameMarker on a dynamic body), its block
+   // contribution is redirected onto the master frame block, transformed by
+   // H = the attachment master block (6x3). myRedTarget[k] is the reduced
+   // target solve index (the master's, or the endpoint's own if free),
+   // myRedH[k] the 6x3 H (null if free). myCrsReductionActive flags that at
+   // least one endpoint is such a slave; myCrsReductionFailed signals a missing
+   // target block, forcing a host fallback.
+   private transient int[] myRedTarget;
+   private transient MatrixNd[] myRedH;
+   private transient boolean myCrsReductionActive = false;
+   private transient boolean myCrsReductionFailed = false;
    protected int myHasWrappableSegs = -1; // -1 means we don't know
    protected int myHasConditionalPoints = -1; // -1 means we don't know
    protected int myHasMovingMarkers = -1; // -1 means we don't know
@@ -3661,7 +3673,15 @@ public class MultiPointSpring extends PointSpringBase
       }
       if (myCrsContext != null) {
          // GPU path: scatter the same s*Ji^T X Jj block to the context CRS.
-         scatterBlockCrs (blkNum, Ji, Jj, X, s);
+         if (myCrsReductionActive &&
+             (myRedH[bi] != null || myRedH[bj] != null)) {
+            // an endpoint is a slave of an active frame: redirect onto the
+            // master block(s) transformed by H (T B T^T).
+            scatterReducedBlockCrs (bi, bj, Ji, Jj, X, s);
+         }
+         else {
+            scatterBlockCrs (blkNum, Ji, Jj, X, s);
+         }
          return;
       }
       int nump = numPoints();
@@ -3759,6 +3779,135 @@ public class MultiPointSpring extends PointSpringBase
       }
    }
 
+   // GPU master-slave reduction (CRS path). Builds the per-endpoint redirect:
+   // an endpoint attached to an active frame (a FrameMarker / attached Point on
+   // a dynamic body) is reduced onto that frame with H = the attachment master
+   // block; a free endpoint keeps its own solve block. Returns true if any
+   // endpoint is such a slave (so applyBlock must use the reduced scatter).
+   private boolean computeCrsReduction() {
+      int nump = numPoints();
+      int numBlks = myNumBlks;
+      if (myRedTarget == null || myRedTarget.length != numBlks) {
+         myRedTarget = new int[numBlks];
+         myRedH = new MatrixNd[numBlks];
+      }
+      boolean active = false;
+      for (int k=0; k<numBlks; k++) {
+         myRedH[k] = null;
+         if (k < nump) {
+            Point pt = getPoint (k);
+            DynamicAttachment at = pt.getAttachment();
+            if (at instanceof PointFrameAttachment) {
+               PointFrameAttachment pfa = (PointFrameAttachment)at;
+               Frame frame = pfa.getFrame();
+               if (frame != null && frame.isActive() &&
+                   frame.getSolveIndex() != -1) {
+                  MatrixBlock gt = pfa.getGT(0);   // gt = -H (6x3)
+                  MatrixNd H = new MatrixNd (gt);
+                  H.negate();
+                  myRedH[k] = H;
+                  myRedTarget[k] = frame.getSolveIndex();
+                  active = true;
+                  continue;
+               }
+            }
+            myRedTarget[k] = pt.getSolveIndex();
+         }
+         else {
+            myRedTarget[k] = getWrappableSolveIndex (k - nump);
+         }
+      }
+      return active;
+   }
+
+   private static MatrixNd identity (int n) {
+      MatrixNd I = new MatrixNd (n, n);
+      I.setIdentity();
+      return I;
+   }
+
+   // GPU master-slave reduction (CRS path): scatter T_i (s*Ji^T X Jj) T_j^T onto
+   // the reduced target block (myRedTarget[bi], myRedTarget[bj]), where T = H
+   // (6x3) for a slave endpoint and the identity otherwise. Mirrors the host
+   // addAttachmentJacobian reduction but at scatter time, so it is order-free.
+   private void scatterReducedBlockCrs (
+      int bi, int bj, Matrix3x6 Ji, Matrix3x6 Jj, Matrix3dBase X, double s) {
+
+      int targetRow = myRedTarget[bi];
+      int targetCol = myRedTarget[bj];
+      if (targetRow == -1 || targetCol == -1) {
+         return;   // couples to a fixed/parametric DOF: not in the active M block
+      }
+      // contribution in endpoint space (same as scatterBlockCrs computes)
+      int rowSize = (Ji == null ? 3 : 6);
+      int colSize = (Jj == null ? 3 : 6);
+      MatrixBlock Bblk = MatrixBlockBase.alloc (rowSize, colSize);
+      if (Ji == null) {
+         if (Jj == null) {
+            Bblk.scaledAdd (s, X);
+         }
+         else {
+            Matrix3d Xs = new Matrix3d (X);
+            Xs.scale (s);
+            Bblk.mulAdd (Xs, Jj);
+         }
+      }
+      else {
+         if (Jj == null) {
+            Matrix3d Xs = new Matrix3d (X);
+            Xs.scale (s);
+            Bblk.mulTransposeLeftAdd (Ji, Xs);
+         }
+         else {
+            Matrix3x6 XsJj = new Matrix3x6();
+            MatrixMulAdd.mulAdd3x6 (XsJj, X, Jj);
+            XsJj.scale (s);
+            Bblk.mulTransposeLeftAdd (Ji, XsJj);
+         }
+      }
+      // apply H on each slave side: result = L * B * R^T  (L,R = H or identity)
+      MatrixNd B = new MatrixNd (Bblk);
+      MatrixNd L = (myRedH[bi] != null ? myRedH[bi] : identity (rowSize));
+      MatrixNd R = (myRedH[bj] != null ? myRedH[bj] : identity (colSize));
+      MatrixNd tmp = new MatrixNd();
+      tmp.mul (L, B);                    // (L.rows x colSize)
+      MatrixNd Rt = new MatrixNd();
+      Rt.transpose (R);                  // (colSize x R.rows)
+      MatrixNd res = new MatrixNd();
+      res.mul (tmp, Rt);                 // (L.rows x R.rows)
+
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+         myCrsContext.getSlotMap();
+      MatrixBlock tgt = myCrsContext.getMatrix().getBlock (targetRow, targetCol);
+      if (tgt == null) {
+         myCrsReductionFailed = true;   // master-coupling block absent -> host
+         return;
+      }
+      int blkNum = tgt.getBlockNumber();
+      if (!slotMap.hasBlockSlots (blkNum)) {
+         return;
+      }
+      double[] vals = myCrsAsValues ? myCrsContext.getCrsValues() : null;
+      for (int r=0; r<res.rowSize(); r++) {
+         for (int c=0; c<res.colSize(); c++) {
+            double v = res.get (r, c);
+            if (v == 0) {
+               continue;
+            }
+            int slot = slotMap.getBlockValueSlot (blkNum, r, c);
+            if (slot < 0) {
+               continue;
+            }
+            if (myCrsAsValues) {
+               vals[slot] += v;
+            }
+            else {
+               myCrsContext.addCrsValueContribution (slot, v);
+            }
+         }
+      }
+   }
+
    // Shared driver for the four GPU CRS hooks: routes the existing
    // addPos/VelJacobian assembly (and the wrap/segment state updates it
    // performs) onto the context CRS via the myCrsContext redirect in applyBlock.
@@ -3768,26 +3917,30 @@ public class MultiPointSpring extends PointSpringBase
       MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
       myCrsContext = context;
       myCrsAsValues = asValues;
+      myCrsReductionActive = computeCrsReduction();
+      myCrsReductionFailed = false;
       try {
          addPosJacobian (null, s);
       }
       finally {
          myCrsContext = null;
       }
-      return true;
+      return !myCrsReductionFailed;
    }
 
    private boolean assembleVelJacobianCrs (
       MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
       myCrsContext = context;
       myCrsAsValues = asValues;
+      myCrsReductionActive = computeCrsReduction();
+      myCrsReductionFailed = false;
       try {
          addVelJacobian (null, s);
       }
       finally {
          myCrsContext = null;
       }
-      return true;
+      return !myCrsReductionFailed;
    }
 
    @Override

@@ -29,6 +29,7 @@ public interface MechSystem {
    public static class GpuAssemblyContext {
       private SparseNumberedBlockMatrix myMatrix;
       private SparseNumberedBlockMatrix.CrsBlockSlotMap mySlotMap;
+      private boolean myReductionFailed = false;
       private double[] myCrsValues;
       private int[] myCrsColIdxs;
       private int[] myCrsRowOffs;
@@ -222,6 +223,7 @@ public interface MechSystem {
       }
 
       public void clearCrsValueContributions() {
+         myReductionFailed = false;
          myNumCrsValueContributions = 0;
          myNumScaledDiagonal3Contributions = 0;
          myNumScaledBlock3Contributions = 0;
@@ -267,6 +269,87 @@ public interface MechSystem {
          myCrsValueContributions[myNumCrsValueContributions] = value;
          myNumCrsValueContributions++;
          myCrsValues[slot] += value;
+      }
+
+      // True if a master-slave reduced scatter could not find its master-
+      // coupling block. The KKT M-block / direct-CRS completeness checks honour
+      // this to fall back to host assembly.
+      public boolean reductionFailed() {
+         return myReductionFailed;
+      }
+
+      // GPU master-slave reduction for a 3x3 point contribution: scatter
+      // T_i (scale*M) T_j^T onto the reduced master block, where T = H (6x3) when
+      // the point is the slave of a PointFrameAttachment to an ACTIVE frame
+      // (e.g. a FrameMarker on a dynamic body) and the identity otherwise.
+      // Shared by AxialSpring (SegmentData) and Point damping. asValues selects
+      // the CPU CRS reference vs the device descriptor. Flags myReductionFailed
+      // (and returns) if a needed master-coupling block is absent.
+      public void addReducedPoint3Contribution (
+         Point pi, Point pj, Matrix3dBase M, double scale, boolean asValues) {
+         if (scale == 0) {
+            return;
+         }
+         PointFrameAttachment ai = pi.getActiveFramePointAttachment();
+         PointFrameAttachment aj = pj.getActiveFramePointAttachment();
+         int ti = (ai != null ? ai.getFrame().getSolveIndex()
+                              : pi.getSolveIndex());
+         int tj = (aj != null ? aj.getFrame().getSolveIndex()
+                              : pj.getSolveIndex());
+         if (ti == -1 || tj == -1) {
+            return;   // couples to a fixed/parametric DOF: not in active M block
+         }
+         MatrixBlock tgt = myMatrix.getBlock (ti, tj);
+         if (tgt == null) {
+            myReductionFailed = true;
+            return;
+         }
+         int blkNum = tgt.getBlockNumber();
+         if (!mySlotMap.hasBlockSlots (blkNum)) {
+            return;
+         }
+         MatrixNd Ms = new MatrixNd (M);
+         Ms.scale (scale);
+         MatrixNd L = reductionTransform (ai);
+         MatrixNd R = reductionTransform (aj);
+         MatrixNd tmp = new MatrixNd();
+         tmp.mul (L, Ms);
+         MatrixNd Rt = new MatrixNd();
+         Rt.transpose (R);
+         MatrixNd res = new MatrixNd();
+         res.mul (tmp, Rt);
+         for (int r=0; r<res.rowSize(); r++) {
+            for (int c=0; c<res.colSize(); c++) {
+               double v = res.get (r, c);
+               if (v == 0) {
+                  continue;
+               }
+               int slot = mySlotMap.getBlockValueSlot (blkNum, r, c);
+               if (slot < 0) {
+                  continue;
+               }
+               if (asValues) {
+                  myCrsValues[slot] += v;
+               }
+               else {
+                  addCrsValueContribution (slot, v);
+               }
+            }
+         }
+      }
+
+      // T = H (6x3, = -getGT(0)) for an active-frame attachment, else the 3x3
+      // identity.
+      private static MatrixNd reductionTransform (PointFrameAttachment pfa) {
+         if (pfa == null) {
+            MatrixNd I = new MatrixNd (3, 3);
+            I.setIdentity();
+            return I;
+         }
+         MatrixBlock gt = pfa.getGT(0);   // -H
+         MatrixNd H = new MatrixNd (gt);
+         H.negate();
+         return H;
       }
 
       public void addScaledDiagonal3CrsValueContribution (

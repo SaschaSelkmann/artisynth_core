@@ -203,17 +203,44 @@ public class Point extends DynamicComponentBase
       return true;
    }
 
+   // If this point is the slave of a PointFrameAttachment whose master frame is
+   // ACTIVE (e.g. a FrameMarker on a dynamic body) and in the solve, returns
+   // that attachment; else null. GPU assembly uses it to redirect contributions
+   // onto the master frame block (H B H^T).
+   public PointFrameAttachment getActiveFramePointAttachment() {
+      DynamicAttachment at = getAttachment();
+      if (at instanceof PointFrameAttachment) {
+         PointFrameAttachment pfa = (PointFrameAttachment)at;
+         Frame frame = pfa.getFrame();
+         if (frame != null && frame.isActive() &&
+             frame.getSolveIndex() != -1) {
+            return pfa;
+         }
+      }
+      return null;
+   }
+
    private void addPointDampingCrs (
       MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      if (myPointDamping == 0) {
+         return;
+      }
+      double d = -s * myPointDamping;
+      if (getActiveFramePointAttachment() != null) {
+         // attached to an active frame: reduce H (d I3) H^T onto the master
+         Matrix3d D = new Matrix3d();
+         D.m00 = d; D.m11 = d; D.m22 = d;
+         context.addReducedPoint3Contribution (this, this, D, 1.0, asValues);
+         return;
+      }
       int blkNum = getSolveIndex();
-      if (myPointDamping == 0 || blkNum == -1) {
+      if (blkNum == -1) {
          return;
       }
       SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap = context.getSlotMap();
       if (!slotMap.hasBlockSlots (blkNum)) {
          return;
       }
-      double d = -s * myPointDamping;
       int s0 = slotMap.getBlockValueSlot (blkNum, 0, 0);
       int s1 = slotMap.getBlockValueSlot (blkNum, 1, 1);
       int s2 = slotMap.getBlockValueSlot (blkNum, 2, 2);

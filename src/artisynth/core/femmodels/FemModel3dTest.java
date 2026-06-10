@@ -1177,6 +1177,79 @@ public class FemModel3dTest extends UnitTest {
       return vel.getBuffer().clone();
    }
 
+   // Steps an ACTIVE rigid body carrying a FrameMarker, connected by a spring to
+   // a fixed anchor, under gravity. The marker is the slave of an active-frame
+   // PointFrameAttachment, so the spring's (and the marker's point-damping)
+   // contributions must be reduced onto the body's 6x6 block (H B H^T) at
+   // scatter time. Guards the generic marker/Point attachment reduction for both
+   // the MultiPointSpring path (scatterReducedBlockCrs) and the AxialSpring path
+   // (SegmentData -> addReducedPoint3Contribution).
+   private double[] runMarkerSpringStep (
+      maspack.solvers.SparseSolverId solverId, boolean useMultiPoint) {
+
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.setPointDamping (0.5);   // exercises the marker point-damping redirect
+
+      Particle anchor = new Particle (1.0, 0.0, 0.0, 0.0);
+      anchor.setDynamic (false);
+      mech.addParticle (anchor);
+
+      RigidBody body = RigidBody.createBox ("body", 0.2, 0.2, 0.2, 1000);
+      body.setPose (new RigidTransform3d (0.5, 0.0, 0.0));
+      body.setFrameDamping (2.0);
+      body.setRotaryDamping (0.5);
+      mech.addRigidBody (body);
+
+      FrameMarker mkr = new FrameMarker();
+      mech.addFrameMarker (mkr, body, new Point3d (-0.1, 0.0, 0.0));
+
+      if (useMultiPoint) {
+         MultiPointSpring spr = new MultiPointSpring (500.0, 1.0, 0.3);
+         spr.addPoint (anchor);
+         spr.addPoint (mkr);
+         mech.addMultiPointSpring (spr);
+      }
+      else {
+         AxialSpring spr = new AxialSpring (500.0, 1.0, 0.3);
+         mech.attachAxialSpring (anchor, mkr, spr);
+      }
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testMarkerSpringEquivalence (boolean useMultiPoint) {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu =
+         runMarkerSpringStep (maspack.solvers.SparseSolverId.CuDss, useMultiPoint);
+      double[] cpu =
+         runMarkerSpringStep (
+            maspack.solvers.SparseSolverId.Pardiso, useMultiPoint);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "marker spring (multiPoint="+useMultiPoint+") cuDSS vs Pardiso "+
+            "mismatch: max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "marker spring (multiPoint="+useMultiPoint+") cuDSS equivalence ok: "+
+         "max="+max+" (ref="+ref+")");
+   }
+
    private void testMultiPointSpringEquivalence (boolean wrap) {
       if (!maspack.solvers.CuDssSolver.isAvailable()) {
          return;
@@ -1343,6 +1416,8 @@ public class FemModel3dTest extends UnitTest {
       testBackwardEulerActiveBodyAttachmentEquivalence();
       testMultiPointSpringEquivalence (/*wrap=*/false);
       testMultiPointSpringEquivalence (/*wrap=*/true);
+      testMarkerSpringEquivalence (/*useMultiPoint=*/false);
+      testMarkerSpringEquivalence (/*useMultiPoint=*/true);
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();
       testSetNumbering();

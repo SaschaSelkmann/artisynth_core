@@ -2453,14 +2453,17 @@ public abstract class MechSystemBase extends RenderableModelBase
       return false;
    }
 
-   // True for an active-master attachment whose stiffness reduction the GPU
-   // linear-elastic geometry kernel handles (addReducedMaterialStiffness3Block):
-   // a PointFrameAttachment with a FemNode3d slave and an active Frame master.
+   // True for an active-master attachment whose master-slave reduction the GPU
+   // assembly handles: a PointFrameAttachment to an active Frame. The reduction
+   // is applied at scatter time onto the master frame block (T B T^T): for a
+   // FemNode3d slave by the linear-elastic geometry kernel
+   // (addReducedMaterialStiffness3Block), and for a FrameMarker / attached Point
+   // slave by the spring CRS hooks (MultiPointSpring.scatterReducedBlockCrs).
+   // Other slave/attachment kinds still force host assembly.
    static boolean isGpuReducibleActiveAttachment (DynamicAttachment at) {
       if (at instanceof PointFrameAttachment) {
          PointFrameAttachment pfa = (PointFrameAttachment)at;
-         return (pfa.getSlave() instanceof FemNode3d &&
-                 pfa.getFrame() != null && pfa.getFrame().isActive());
+         return (pfa.getFrame() != null && pfa.getFrame().isActive());
       }
       return false;
    }
@@ -2497,6 +2500,9 @@ public abstract class MechSystemBase extends RenderableModelBase
       if (hasAttachmentJacobianContributions()) {
          complete = false;
       }
+      if (context.reductionFailed()) {
+         complete = false;   // a marker reduction could not find its master block
+      }
       return complete;
    }
 
@@ -2527,6 +2533,9 @@ public abstract class MechSystemBase extends RenderableModelBase
       if (hasAttachmentJacobianContributions()) {
          complete = false;
       }
+      if (context.reductionFailed()) {
+         complete = false;   // a marker reduction could not find its master block
+      }
       return complete;
    }
 
@@ -2552,6 +2561,9 @@ public abstract class MechSystemBase extends RenderableModelBase
       }
       if (hasAttachmentJacobianContributions()) {
          complete = false;
+      }
+      if (context.reductionFailed()) {
+         complete = false;   // a marker reduction could not find its master block
       }
       return complete;
    }
@@ -2582,6 +2594,9 @@ public abstract class MechSystemBase extends RenderableModelBase
       }
       if (hasAttachmentJacobianContributions()) {
          complete = false;
+      }
+      if (context.reductionFailed()) {
+         complete = false;   // a marker reduction could not find its master block
       }
       return complete;
    }
