@@ -279,77 +279,106 @@ public interface MechSystem {
       }
 
       // GPU master-slave reduction for a 3x3 point contribution: scatter
-      // T_i (scale*M) T_j^T onto the reduced master block, where T = H (6x3) when
-      // the point is the slave of a PointFrameAttachment to an ACTIVE frame
-      // (e.g. a FrameMarker on a dynamic body) and the identity otherwise.
-      // Shared by AxialSpring (SegmentData) and Point damping. asValues selects
-      // the CPU CRS reference vs the device descriptor. Flags myReductionFailed
-      // (and returns) if a needed master-coupling block is absent.
+      // sum_{a,b} G_a (scale*M) G_b^T onto the reduced master blocks, where the
+      // G_a are the per-master attachment blocks (from getGT) of pi's
+      // PointAttachment with an active master -- G = H (6x3) for a
+      // PointFrameAttachment, w_k*I3 (3x3) per node for a PointFem3dAttachment --
+      // or the single identity (the point's own block) for a free point. This is
+      // the host addAttachmentJacobian reduction done at scatter time. Shared by
+      // AxialSpring (SegmentData) and Point damping. asValues selects the CPU CRS
+      // reference vs the device descriptor. Flags myReductionFailed if a needed
+      // master-coupling block is absent.
       public void addReducedPoint3Contribution (
          Point pi, Point pj, Matrix3dBase M, double scale, boolean asValues) {
          if (scale == 0) {
             return;
          }
-         PointFrameAttachment ai = pi.getActiveFramePointAttachment();
-         PointFrameAttachment aj = pj.getActiveFramePointAttachment();
-         int ti = (ai != null ? ai.getFrame().getSolveIndex()
-                              : pi.getSolveIndex());
-         int tj = (aj != null ? aj.getFrame().getSolveIndex()
-                              : pj.getSolveIndex());
-         if (ti == -1 || tj == -1) {
-            return;   // couples to a fixed/parametric DOF: not in active M block
-         }
-         MatrixBlock tgt = myMatrix.getBlock (ti, tj);
-         if (tgt == null) {
-            myReductionFailed = true;
-            return;
-         }
-         int blkNum = tgt.getBlockNumber();
-         if (!mySlotMap.hasBlockSlots (blkNum)) {
-            return;
-         }
+         ArrayList<Integer> ti = new ArrayList<>();
+         ArrayList<MatrixNd> Gi = new ArrayList<>();
+         ArrayList<Integer> tj = new ArrayList<>();
+         ArrayList<MatrixNd> Gj = new ArrayList<>();
+         collectPointReductionMasters (pi, ti, Gi);
+         collectPointReductionMasters (pj, tj, Gj);
          MatrixNd Ms = new MatrixNd (M);
          Ms.scale (scale);
-         MatrixNd L = reductionTransform (ai);
-         MatrixNd R = reductionTransform (aj);
-         MatrixNd tmp = new MatrixNd();
-         tmp.mul (L, Ms);
-         MatrixNd Rt = new MatrixNd();
-         Rt.transpose (R);
-         MatrixNd res = new MatrixNd();
-         res.mul (tmp, Rt);
-         for (int r=0; r<res.rowSize(); r++) {
-            for (int c=0; c<res.colSize(); c++) {
-               double v = res.get (r, c);
-               if (v == 0) {
+         for (int a=0; a<ti.size(); a++) {
+            int ta = ti.get(a);
+            if (ta == -1) {
+               continue;
+            }
+            MatrixNd GaM = new MatrixNd();
+            GaM.mul (Gi.get(a), Ms);         // (mdA x 3)
+            for (int b=0; b<tj.size(); b++) {
+               int tb = tj.get(b);
+               if (tb == -1) {
                   continue;
                }
-               int slot = mySlotMap.getBlockValueSlot (blkNum, r, c);
-               if (slot < 0) {
+               MatrixBlock tgt = myMatrix.getBlock (ta, tb);
+               if (tgt == null) {
+                  myReductionFailed = true;
                   continue;
                }
-               if (asValues) {
-                  myCrsValues[slot] += v;
+               int blkNum = tgt.getBlockNumber();
+               if (!mySlotMap.hasBlockSlots (blkNum)) {
+                  continue;
                }
-               else {
-                  addCrsValueContribution (slot, v);
+               MatrixNd Gbt = new MatrixNd();
+               Gbt.transpose (Gj.get(b));
+               MatrixNd res = new MatrixNd();
+               res.mul (GaM, Gbt);           // (mdA x mdB)
+               for (int r=0; r<res.rowSize(); r++) {
+                  for (int c=0; c<res.colSize(); c++) {
+                     double v = res.get (r, c);
+                     if (v == 0) {
+                        continue;
+                     }
+                     int slot = mySlotMap.getBlockValueSlot (blkNum, r, c);
+                     if (slot < 0) {
+                        continue;
+                     }
+                     if (asValues) {
+                        myCrsValues[slot] += v;
+                     }
+                     else {
+                        addCrsValueContribution (slot, v);
+                     }
+                  }
                }
             }
          }
       }
 
-      // T = H (6x3, = -getGT(0)) for an active-frame attachment, else the 3x3
-      // identity.
-      private static MatrixNd reductionTransform (PointFrameAttachment pfa) {
-         if (pfa == null) {
-            MatrixNd I = new MatrixNd (3, 3);
-            I.setIdentity();
-            return I;
+      // Appends the reduced masters of a point: for a PointAttachment with an
+      // active master, the (master solve index, G) pairs where G = -getGT(idx)
+      // (the per-master block mapping the point's 3 DOF to the master); for a
+      // free point, the single (own solve index, 3x3 identity).
+      private void collectPointReductionMasters (
+         Point p, ArrayList<Integer> targets, ArrayList<MatrixNd> Gs) {
+         DynamicAttachment at = p.getAttachment();
+         if (at instanceof PointAttachment) {
+            DynamicComponent[] masters = at.getMasters();
+            boolean anyActive = false;
+            for (DynamicComponent m : masters) {
+               if (m.isActive()) {
+                  anyActive = true;
+                  break;
+               }
+            }
+            if (anyActive) {
+               for (int idx=0; idx<masters.length; idx++) {
+                  MatrixBlock gt = at.getGT (idx);   // -G
+                  MatrixNd G = new MatrixNd (gt);
+                  G.negate();
+                  Gs.add (G);
+                  targets.add (masters[idx].getSolveIndex());
+               }
+               return;
+            }
          }
-         MatrixBlock gt = pfa.getGT(0);   // -H
-         MatrixNd H = new MatrixNd (gt);
-         H.negate();
-         return H;
+         MatrixNd I = new MatrixNd (3, 3);
+         I.setIdentity();
+         Gs.add (I);
+         targets.add (p.getSolveIndex());
       }
 
       public void addScaledDiagonal3CrsValueContribution (

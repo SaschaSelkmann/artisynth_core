@@ -141,16 +141,18 @@ public class MultiPointSpring extends PointSpringBase
    // (false) vs the CPU CRS reference (true; used by the J*v / verifyCrs term).
    private transient MechSystem.GpuAssemblyContext myCrsContext = null;
    private transient boolean myCrsAsValues = false;
-   // GPU master-slave reduction (CRS path): for an endpoint attached to an
-   // ACTIVE frame (e.g. a FrameMarker on a dynamic body), its block
-   // contribution is redirected onto the master frame block, transformed by
-   // H = the attachment master block (6x3). myRedTarget[k] is the reduced
-   // target solve index (the master's, or the endpoint's own if free),
-   // myRedH[k] the 6x3 H (null if free). myCrsReductionActive flags that at
-   // least one endpoint is such a slave; myCrsReductionFailed signals a missing
-   // target block, forcing a host fallback.
-   private transient int[] myRedTarget;
-   private transient MatrixNd[] myRedH;
+   // GPU master-slave reduction (CRS path): per spring endpoint k, the reduced
+   // master list -- myRedTargets[k][a] = target solve index, myRedG[k][a] = the
+   // G block (masterDim x endpointDim) mapping the endpoint DOF onto that master.
+   // A free point is a single (own solve index, I3); a wrappable frame a single
+   // (frame solve index, I6); a marker slave (PointFrameAttachment /
+   // PointFem3dAttachment with active master) one entry per master from getGT
+   // (H 6x3, or w_k I3 per node). myRedSlave[k] flags a reducible marker.
+   // myCrsReductionActive flags any slave endpoint; myCrsReductionFailed a
+   // missing master-coupling block (forcing host fallback).
+   private transient int[][] myRedTargets;
+   private transient MatrixNd[][] myRedG;
+   private transient boolean[] myRedSlave;
    private transient boolean myCrsReductionActive = false;
    private transient boolean myCrsReductionFailed = false;
    protected int myHasWrappableSegs = -1; // -1 means we don't know
@@ -3674,9 +3676,9 @@ public class MultiPointSpring extends PointSpringBase
       if (myCrsContext != null) {
          // GPU path: scatter the same s*Ji^T X Jj block to the context CRS.
          if (myCrsReductionActive &&
-             (myRedH[bi] != null || myRedH[bj] != null)) {
-            // an endpoint is a slave of an active frame: redirect onto the
-            // master block(s) transformed by H (T B T^T).
+             (myRedSlave[bi] || myRedSlave[bj])) {
+            // an endpoint is an attached slave: redirect onto its master
+            // block(s) (sum_{a,b} G_a B G_b^T).
             scatterReducedBlockCrs (bi, bj, Ji, Jj, X, s);
          }
          else {
@@ -3779,42 +3781,50 @@ public class MultiPointSpring extends PointSpringBase
       }
    }
 
-   // GPU master-slave reduction (CRS path). Builds the per-endpoint redirect:
-   // an endpoint attached to an active frame (a FrameMarker / attached Point on
-   // a dynamic body) is reduced onto that frame with H = the attachment master
-   // block; a free endpoint keeps its own solve block. Returns true if any
-   // endpoint is such a slave (so applyBlock must use the reduced scatter).
+   // GPU master-slave reduction (CRS path). Builds the per-endpoint reduced
+   // master list: a free point -> single (own solve index, I3); a wrappable
+   // frame -> single (frame solve index, I6); a marker slave
+   // (PointFrameAttachment / PointFem3dAttachment with active master) -> one
+   // (master solve index, G) per master from getGT (H 6x3, or w_k I3 per node).
+   // Returns true if any endpoint is a marker slave (so applyBlock uses the
+   // reduced scatter).
    private boolean computeCrsReduction() {
       int nump = numPoints();
       int numBlks = myNumBlks;
-      if (myRedTarget == null || myRedTarget.length != numBlks) {
-         myRedTarget = new int[numBlks];
-         myRedH = new MatrixNd[numBlks];
+      if (myRedTargets == null || myRedTargets.length != numBlks) {
+         myRedTargets = new int[numBlks][];
+         myRedG = new MatrixNd[numBlks][];
+         myRedSlave = new boolean[numBlks];
       }
       boolean active = false;
       for (int k=0; k<numBlks; k++) {
-         myRedH[k] = null;
+         myRedSlave[k] = false;
          if (k < nump) {
             Point pt = getPoint (k);
-            DynamicAttachment at = pt.getAttachment();
-            if (at instanceof PointFrameAttachment) {
-               PointFrameAttachment pfa = (PointFrameAttachment)at;
-               Frame frame = pfa.getFrame();
-               if (frame != null && frame.isActive() &&
-                   frame.getSolveIndex() != -1) {
-                  MatrixBlock gt = pfa.getGT(0);   // gt = -H (6x3)
-                  MatrixNd H = new MatrixNd (gt);
-                  H.negate();
-                  myRedH[k] = H;
-                  myRedTarget[k] = frame.getSolveIndex();
-                  active = true;
-                  continue;
+            if (pt.isGpuReducibleSlave()) {
+               DynamicAttachment at = pt.getAttachment();
+               DynamicComponent[] masters = at.getMasters();
+               int[] tg = new int[masters.length];
+               MatrixNd[] G = new MatrixNd[masters.length];
+               for (int idx=0; idx<masters.length; idx++) {
+                  MatrixBlock gt = at.getGT (idx);   // -G
+                  MatrixNd Gm = new MatrixNd (gt);
+                  Gm.negate();
+                  G[idx] = Gm;
+                  tg[idx] = masters[idx].getSolveIndex();
                }
+               myRedTargets[k] = tg;
+               myRedG[k] = G;
+               myRedSlave[k] = true;
+               active = true;
+               continue;
             }
-            myRedTarget[k] = pt.getSolveIndex();
+            myRedTargets[k] = new int[] { pt.getSolveIndex() };
+            myRedG[k] = new MatrixNd[] { identity (3) };
          }
          else {
-            myRedTarget[k] = getWrappableSolveIndex (k - nump);
+            myRedTargets[k] = new int[] { getWrappableSolveIndex (k - nump) };
+            myRedG[k] = new MatrixNd[] { identity (6) };
          }
       }
       return active;
@@ -3826,19 +3836,16 @@ public class MultiPointSpring extends PointSpringBase
       return I;
    }
 
-   // GPU master-slave reduction (CRS path): scatter T_i (s*Ji^T X Jj) T_j^T onto
-   // the reduced target block (myRedTarget[bi], myRedTarget[bj]), where T = H
-   // (6x3) for a slave endpoint and the identity otherwise. Mirrors the host
-   // addAttachmentJacobian reduction but at scatter time, so it is order-free.
+   // GPU master-slave reduction (CRS path): scatter sum_{a,b} G_a B G_b^T onto
+   // the reduced master blocks, where B = s*Ji^T X Jj (the endpoint-space block
+   // scatterBlockCrs would compute) and the G_a/G_b are the per-master blocks of
+   // each endpoint (identity for a free point / wrappable frame, getGT blocks
+   // for a marker slave). Mirrors the host addAttachmentJacobian reduction at
+   // scatter time, so it is order-free and handles multi-master (PointFem)
+   // endpoints.
    private void scatterReducedBlockCrs (
       int bi, int bj, Matrix3x6 Ji, Matrix3x6 Jj, Matrix3dBase X, double s) {
 
-      int targetRow = myRedTarget[bi];
-      int targetCol = myRedTarget[bj];
-      if (targetRow == -1 || targetCol == -1) {
-         return;   // couples to a fixed/parametric DOF: not in the active M block
-      }
-      // contribution in endpoint space (same as scatterBlockCrs computes)
       int rowSize = (Ji == null ? 3 : 6);
       int colSize = (Jj == null ? 3 : 6);
       MatrixBlock Bblk = MatrixBlockBase.alloc (rowSize, colSize);
@@ -3865,44 +3872,55 @@ public class MultiPointSpring extends PointSpringBase
             Bblk.mulTransposeLeftAdd (Ji, XsJj);
          }
       }
-      // apply H on each slave side: result = L * B * R^T  (L,R = H or identity)
       MatrixNd B = new MatrixNd (Bblk);
-      MatrixNd L = (myRedH[bi] != null ? myRedH[bi] : identity (rowSize));
-      MatrixNd R = (myRedH[bj] != null ? myRedH[bj] : identity (colSize));
-      MatrixNd tmp = new MatrixNd();
-      tmp.mul (L, B);                    // (L.rows x colSize)
-      MatrixNd Rt = new MatrixNd();
-      Rt.transpose (R);                  // (colSize x R.rows)
-      MatrixNd res = new MatrixNd();
-      res.mul (tmp, Rt);                 // (L.rows x R.rows)
-
       SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
          myCrsContext.getSlotMap();
-      MatrixBlock tgt = myCrsContext.getMatrix().getBlock (targetRow, targetCol);
-      if (tgt == null) {
-         myCrsReductionFailed = true;   // master-coupling block absent -> host
-         return;
-      }
-      int blkNum = tgt.getBlockNumber();
-      if (!slotMap.hasBlockSlots (blkNum)) {
-         return;
-      }
       double[] vals = myCrsAsValues ? myCrsContext.getCrsValues() : null;
-      for (int r=0; r<res.rowSize(); r++) {
-         for (int c=0; c<res.colSize(); c++) {
-            double v = res.get (r, c);
-            if (v == 0) {
+      int[] tgi = myRedTargets[bi];
+      int[] tgj = myRedTargets[bj];
+      for (int a=0; a<tgi.length; a++) {
+         int ta = tgi[a];
+         if (ta == -1) {
+            continue;
+         }
+         MatrixNd GaB = new MatrixNd();
+         GaB.mul (myRedG[bi][a], B);          // (mdA x colSize)
+         for (int b=0; b<tgj.length; b++) {
+            int tb = tgj[b];
+            if (tb == -1) {
                continue;
             }
-            int slot = slotMap.getBlockValueSlot (blkNum, r, c);
-            if (slot < 0) {
+            MatrixBlock tgt =
+               myCrsContext.getMatrix().getBlock (ta, tb);
+            if (tgt == null) {
+               myCrsReductionFailed = true;   // master block absent -> host
                continue;
             }
-            if (myCrsAsValues) {
-               vals[slot] += v;
+            int blkNum = tgt.getBlockNumber();
+            if (!slotMap.hasBlockSlots (blkNum)) {
+               continue;
             }
-            else {
-               myCrsContext.addCrsValueContribution (slot, v);
+            MatrixNd Gbt = new MatrixNd();
+            Gbt.transpose (myRedG[bj][b]);
+            MatrixNd res = new MatrixNd();
+            res.mul (GaB, Gbt);               // (mdA x mdB)
+            for (int r=0; r<res.rowSize(); r++) {
+               for (int c=0; c<res.colSize(); c++) {
+                  double v = res.get (r, c);
+                  if (v == 0) {
+                     continue;
+                  }
+                  int slot = slotMap.getBlockValueSlot (blkNum, r, c);
+                  if (slot < 0) {
+                     continue;
+                  }
+                  if (myCrsAsValues) {
+                     vals[slot] += v;
+                  }
+                  else {
+                     myCrsContext.addCrsValueContribution (slot, v);
+                  }
+               }
             }
          }
       }

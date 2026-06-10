@@ -39,7 +39,6 @@ import maspack.util.Range;
 import maspack.util.EnumRange;
 import artisynth.core.mechmodels.MechSystemSolver.PosStabilization;
 import artisynth.core.mechmodels.MechSystemSolver.Integrator;
-import artisynth.core.femmodels.FemNode3d;
 import artisynth.core.modelbase.*;
 import artisynth.core.util.ArtisynthIO;
 import artisynth.core.util.TimeBase;
@@ -2454,16 +2453,22 @@ public abstract class MechSystemBase extends RenderableModelBase
    }
 
    // True for an active-master attachment whose master-slave reduction the GPU
-   // assembly handles: a PointFrameAttachment to an active Frame. The reduction
-   // is applied at scatter time onto the master frame block (T B T^T): for a
-   // FemNode3d slave by the linear-elastic geometry kernel
-   // (addReducedMaterialStiffness3Block), and for a FrameMarker / attached Point
-   // slave by the spring CRS hooks (MultiPointSpring.scatterReducedBlockCrs).
-   // Other slave/attachment kinds still force host assembly.
+   // assembly handles: a PointAttachment (point slave) with at least one active
+   // master. The reduction is applied at scatter time onto the master block(s)
+   // (sum over masters of G B G^T, G = the per-master attachment block from
+   // getGT): a FemNode3d slave's FEM stiffness by the linear-elastic geometry
+   // kernel; a FrameMarker (PointFrameAttachment) or FemMarker
+   // (PointFem3dAttachment) slave's spring / point-damping contributions by the
+   // shared point reduction (MultiPointSpring.scatterReducedBlockCrs /
+   // GpuAssemblyContext.addReducedPoint3Contribution). Frame-slave attachments
+   // (e.g. FrameFrameAttachment) still force host assembly.
    static boolean isGpuReducibleActiveAttachment (DynamicAttachment at) {
-      if (at instanceof PointFrameAttachment) {
-         PointFrameAttachment pfa = (PointFrameAttachment)at;
-         return (pfa.getFrame() != null && pfa.getFrame().isActive());
+      if (at instanceof PointAttachment) {
+         for (DynamicComponent m : at.getMasters()) {
+            if (m.isActive()) {
+               return true;
+            }
+         }
       }
       return false;
    }

@@ -203,21 +203,21 @@ public class Point extends DynamicComponentBase
       return true;
    }
 
-   // If this point is the slave of a PointFrameAttachment whose master frame is
-   // ACTIVE (e.g. a FrameMarker on a dynamic body) and in the solve, returns
-   // that attachment; else null. GPU assembly uses it to redirect contributions
-   // onto the master frame block (H B H^T).
-   public PointFrameAttachment getActiveFramePointAttachment() {
+   // True if this point is the slave of a PointAttachment (PointFrameAttachment,
+   // PointFem3dAttachment, ...) with at least one ACTIVE master -- e.g. a
+   // FrameMarker on a dynamic body or a FemMarker on active FEM nodes. GPU
+   // assembly redirects such a point's contributions onto its master block(s)
+   // (sum over masters of G B G^T, G from the attachment's getGT).
+   public boolean isGpuReducibleSlave() {
       DynamicAttachment at = getAttachment();
-      if (at instanceof PointFrameAttachment) {
-         PointFrameAttachment pfa = (PointFrameAttachment)at;
-         Frame frame = pfa.getFrame();
-         if (frame != null && frame.isActive() &&
-             frame.getSolveIndex() != -1) {
-            return pfa;
+      if (at instanceof PointAttachment) {
+         for (DynamicComponent m : at.getMasters()) {
+            if (m.isActive()) {
+               return true;
+            }
          }
       }
-      return null;
+      return false;
    }
 
    private void addPointDampingCrs (
@@ -226,8 +226,8 @@ public class Point extends DynamicComponentBase
          return;
       }
       double d = -s * myPointDamping;
-      if (getActiveFramePointAttachment() != null) {
-         // attached to an active frame: reduce H (d I3) H^T onto the master
+      if (isGpuReducibleSlave()) {
+         // attached to active master(s): reduce sum G (d I3) G^T onto them
          Matrix3d D = new Matrix3d();
          D.m00 = d; D.m11 = d; D.m22 = d;
          context.addReducedPoint3Contribution (this, this, D, 1.0, asValues);

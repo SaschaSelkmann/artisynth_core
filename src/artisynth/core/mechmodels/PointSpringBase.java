@@ -742,12 +742,11 @@ public abstract class PointSpringBase extends Spring
       // reference, where the device descriptors must NOT be double-counted).
       protected void addToJacobianCrs (
          MechSystem.GpuAssemblyContext context, Matrix3d M, boolean asValues) {
-         if (pnt0.getActiveFramePointAttachment() != null ||
-             pnt1.getActiveFramePointAttachment() != null) {
-            // an endpoint is a slave of an active frame (e.g. a FrameMarker on a
-            // dynamic body): redirect the 3x3 blocks onto the master frame
-            // block(s) transformed by H (H B H^T), mirroring the host
-            // addAttachmentJacobian reduction at scatter time.
+         if (pnt0.isGpuReducibleSlave() || pnt1.isGpuReducibleSlave()) {
+            // an endpoint is an attached slave with active master(s) (e.g. a
+            // FrameMarker on a dynamic body or a FemMarker on FEM nodes):
+            // redirect the 3x3 blocks onto the master block(s) (G B G^T),
+            // mirroring the host addAttachmentJacobian reduction at scatter time.
             context.addReducedPoint3Contribution (pnt0, pnt0, M,  1.0, asValues);
             context.addReducedPoint3Contribution (pnt1, pnt1, M,  1.0, asValues);
             context.addReducedPoint3Contribution (pnt0, pnt1, M, -1.0, asValues);

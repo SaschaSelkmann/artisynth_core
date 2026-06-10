@@ -1228,6 +1228,84 @@ public class FemModel3dTest extends UnitTest {
       return vel.getBuffer().clone();
    }
 
+   // Steps a non-corotated linear FEM beam (x-min fixed) with a FemMarker near
+   // the free end, sprung to a fixed anchor, under gravity. The FemMarker is the
+   // slave of a PointFem3dAttachment (MULTIPLE active FEM-node masters with
+   // weights), so the spring's contribution must reduce onto those node blocks
+   // (sum_k w_k ... ) -- the multi-master generalization. The same node blocks
+   // also carry the FEM stiffness. Guards the PointFem3dAttachment reduction for
+   // both spring paths.
+   private double[] runFemMarkerSpringStep (
+      maspack.solvers.SparseSolverId solverId, boolean useMultiPoint) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      FemMarker mkr = new FemMarker (null, 0.4, 0.0, 0.0);
+      fem.addMarker (mkr);
+
+      Particle anchor = new Particle (1.0, 0.4, 0.0, -0.5);
+      anchor.setDynamic (false);
+      mech.addParticle (anchor);
+
+      if (useMultiPoint) {
+         MultiPointSpring spr = new MultiPointSpring (500.0, 1.0, 0.2);
+         spr.addPoint (anchor);
+         spr.addPoint (mkr);
+         mech.addMultiPointSpring (spr);
+      }
+      else {
+         AxialSpring spr = new AxialSpring (500.0, 1.0, 0.2);
+         mech.attachAxialSpring (anchor, mkr, spr);
+      }
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testFemMarkerSpringEquivalence (boolean useMultiPoint) {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu = runFemMarkerSpringStep (
+         maspack.solvers.SparseSolverId.CuDss, useMultiPoint);
+      double[] cpu = runFemMarkerSpringStep (
+         maspack.solvers.SparseSolverId.Pardiso, useMultiPoint);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "Fem-marker spring (multiPoint="+useMultiPoint+") cuDSS vs Pardiso "+
+            "mismatch: max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "Fem-marker spring (multiPoint="+useMultiPoint+") cuDSS equivalence "+
+         "ok: max="+max+" (ref="+ref+")");
+   }
+
    private void testMarkerSpringEquivalence (boolean useMultiPoint) {
       if (!maspack.solvers.CuDssSolver.isAvailable()) {
          return;
@@ -1418,6 +1496,8 @@ public class FemModel3dTest extends UnitTest {
       testMultiPointSpringEquivalence (/*wrap=*/true);
       testMarkerSpringEquivalence (/*useMultiPoint=*/false);
       testMarkerSpringEquivalence (/*useMultiPoint=*/true);
+      testFemMarkerSpringEquivalence (/*useMultiPoint=*/false);
+      testFemMarkerSpringEquivalence (/*useMultiPoint=*/true);
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();
       testSetNumbering();
