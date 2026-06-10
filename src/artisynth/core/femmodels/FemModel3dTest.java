@@ -1306,6 +1306,84 @@ public class FemModel3dTest extends UnitTest {
          "ok: max="+max+" (ref="+ref+")");
    }
 
+   // Steps an active rigid body carrying a FrameMarker AND a wrap cylinder
+   // (attached to the body via a FrameFrameAttachment), with a MultiPointSpring
+   // from a fixed anchor to the marker wrapping that cylinder, under gravity.
+   // The wrappable cylinder is itself a frame slave, so its 6x6 wrap-coupling
+   // block must reduce onto the master body (FrameFrameAttachment getGT) -- and
+   // since the marker also reduces to that body, the reduced targets are the
+   // body's own block, which exists. Guards the FrameFrameAttachment reduction.
+   private double[] runWrapAttachStep (maspack.solvers.SparseSolverId solverId) {
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+
+      Particle anchor = new Particle (1.0, 0.0, 0.0, 0.0);
+      anchor.setDynamic (false);
+      mech.addParticle (anchor);
+
+      RigidBody body = RigidBody.createBox ("body", 0.2, 0.2, 0.2, 1000);
+      body.setPose (new RigidTransform3d (0.8, 0.0, 0.0));
+      body.setFrameDamping (2.0);
+      body.setRotaryDamping (0.5);
+      mech.addRigidBody (body);
+
+      FrameMarker mkr = new FrameMarker();
+      mech.addFrameMarker (mkr, body, new Point3d (-0.1, 0.0, 0.0));
+
+      // wrap cylinder attached to the (active) body -> FrameFrameAttachment slave
+      RigidCylinder cyl = new RigidCylinder ("cyl", 0.2, 0.4, 50.0, 24);
+      cyl.setPose (new RigidTransform3d (
+         new Vector3d (0.4, 0.0, -0.15),
+         new AxisAngle (1, 0, 0, Math.PI/2)));
+      mech.addRigidBody (cyl);
+      mech.attachFrame (cyl, body);
+
+      MultiPointSpring spr = new MultiPointSpring (200.0, 1.0, 0.0);
+      spr.addPoint (anchor);
+      spr.setSegmentWrappable (50);
+      spr.addPoint (mkr);
+      spr.addWrappable (cyl);
+      spr.updateWrapSegments();
+      mech.addMultiPointSpring (spr);
+      // anchor (0,0,0) to marker (world ~0.7,0,0): straight length 0.7; wrapping
+      // over the cylinder makes the strand longer.
+      if (spr.getActiveLength() <= 0.7 + 1e-3) {
+         throw new TestException (
+            "wrap-attach test not wrapping: length="+spr.getActiveLength());
+      }
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testWrapAttachEquivalence() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu = runWrapAttachStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu = runWrapAttachStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "wrap-attach (FrameFrame) cuDSS vs Pardiso mismatch: max="+max+
+            " (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "wrap-attach (FrameFrame) cuDSS equivalence ok: max="+max+
+         " (ref="+ref+")");
+   }
+
    private void testMarkerSpringEquivalence (boolean useMultiPoint) {
       if (!maspack.solvers.CuDssSolver.isAvailable()) {
          return;
@@ -1498,6 +1576,7 @@ public class FemModel3dTest extends UnitTest {
       testMarkerSpringEquivalence (/*useMultiPoint=*/true);
       testFemMarkerSpringEquivalence (/*useMultiPoint=*/false);
       testFemMarkerSpringEquivalence (/*useMultiPoint=*/true);
+      testWrapAttachEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();
       testSetNumbering();

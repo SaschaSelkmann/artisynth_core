@@ -2460,15 +2460,29 @@ public abstract class MechSystemBase extends RenderableModelBase
    // kernel; a FrameMarker (PointFrameAttachment) or FemMarker
    // (PointFem3dAttachment) slave's spring / point-damping contributions by the
    // shared point reduction (MultiPointSpring.scatterReducedBlockCrs /
-   // GpuAssemblyContext.addReducedPoint3Contribution). Frame-slave attachments
-   // (e.g. FrameFrameAttachment) still force host assembly.
+   // GpuAssemblyContext.addReducedPoint3Contribution); and a FrameFrameAttachment
+   // frame slave's wrappable coupling (MultiPointSpring) and mass (moved to the
+   // master by addMassToMasters). A frame slave's frame/rotary damping would be
+   // dropped (it is skipped as an inactive force effector), so FrameFrame is only
+   // reduced when the slave has none. Other attachment kinds force host assembly.
    static boolean isGpuReducibleActiveAttachment (DynamicAttachment at) {
-      if (at instanceof PointAttachment) {
-         for (DynamicComponent m : at.getMasters()) {
-            if (m.isActive()) {
-               return true;
-            }
+      boolean activeMaster = false;
+      for (DynamicComponent m : at.getMasters()) {
+         if (m.isActive()) {
+            activeMaster = true;
+            break;
          }
+      }
+      if (!activeMaster) {
+         return false;
+      }
+      if (at instanceof PointAttachment) {
+         return true;
+      }
+      if (at instanceof FrameFrameAttachment) {
+         Frame slave = ((FrameFrameAttachment)at).getSlave();
+         return (slave != null &&
+                 slave.getFrameDamping() == 0 && slave.getRotaryDamping() == 0);
       }
       return false;
    }

@@ -3801,33 +3801,68 @@ public class MultiPointSpring extends PointSpringBase
          myRedSlave[k] = false;
          if (k < nump) {
             Point pt = getPoint (k);
-            if (pt.isGpuReducibleSlave()) {
-               DynamicAttachment at = pt.getAttachment();
-               DynamicComponent[] masters = at.getMasters();
-               int[] tg = new int[masters.length];
-               MatrixNd[] G = new MatrixNd[masters.length];
-               for (int idx=0; idx<masters.length; idx++) {
-                  MatrixBlock gt = at.getGT (idx);   // -G
-                  MatrixNd Gm = new MatrixNd (gt);
-                  Gm.negate();
-                  G[idx] = Gm;
-                  tg[idx] = masters[idx].getSolveIndex();
-               }
-               myRedTargets[k] = tg;
-               myRedG[k] = G;
+            if (pt.isGpuReducibleSlave() && fillReducedMasters (k, pt)) {
                myRedSlave[k] = true;
                active = true;
-               continue;
             }
-            myRedTargets[k] = new int[] { pt.getSolveIndex() };
-            myRedG[k] = new MatrixNd[] { identity (3) };
+            else {
+               myRedTargets[k] = new int[] { pt.getSolveIndex() };
+               myRedG[k] = new MatrixNd[] { identity (3) };
+            }
          }
          else {
-            myRedTargets[k] = new int[] { getWrappableSolveIndex (k - nump) };
-            myRedG[k] = new MatrixNd[] { identity (6) };
+            // a wrappable frame: reduce onto its master(s) if it is itself an
+            // attached slave (e.g. a wrap cylinder attached to an active joint
+            // body via FrameFrameAttachment), else keep its own 6x6 block.
+            Wrappable w = getWrappable (k - nump);
+            DynamicComponent wc =
+               (w instanceof DynamicComponent) ? (DynamicComponent)w : null;
+            if (wc != null && attachmentHasActiveMaster (wc.getAttachment()) &&
+                fillReducedMasters (k, wc)) {
+               myRedSlave[k] = true;
+               active = true;
+            }
+            else {
+               myRedTargets[k] = new int[] { getWrappableSolveIndex (k - nump) };
+               myRedG[k] = new MatrixNd[] { identity (6) };
+            }
          }
       }
       return active;
+   }
+
+   // Fills myRedTargets[k]/myRedG[k] from the masters of a slave component's
+   // attachment (target solve indices + G = -getGT(idx) per master). Returns
+   // false (caller keeps the component's own block) if it has no attachment.
+   private boolean fillReducedMasters (int k, DynamicComponent c) {
+      DynamicAttachment at = c.getAttachment();
+      if (at == null) {
+         return false;
+      }
+      DynamicComponent[] masters = at.getMasters();
+      int[] tg = new int[masters.length];
+      MatrixNd[] G = new MatrixNd[masters.length];
+      for (int idx=0; idx<masters.length; idx++) {
+         MatrixBlock gt = at.getGT (idx);   // -G
+         MatrixNd Gm = new MatrixNd (gt);
+         Gm.negate();
+         G[idx] = Gm;
+         tg[idx] = masters[idx].getSolveIndex();
+      }
+      myRedTargets[k] = tg;
+      myRedG[k] = G;
+      return true;
+   }
+
+   private static boolean attachmentHasActiveMaster (DynamicAttachment at) {
+      if (at != null) {
+         for (DynamicComponent m : at.getMasters()) {
+            if (m.isActive()) {
+               return true;
+            }
+         }
+      }
+      return false;
    }
 
    private static MatrixNd identity (int n) {
