@@ -139,6 +139,12 @@ public class MechSystemSolver {
    private int myKktVelJacRhsVersion = -1;
    private boolean myKktVelJacRhsAnalyzed = false;
 
+   // cached device solver/context for the FEM elastic-force SpMV (task 16)
+   private MechSystem.GpuAssemblyContext myFemElasticContext = null;
+   private CuDssSolver myFemElasticSolver = null;
+   private int myFemElasticVersion = -1;
+   private boolean myFemElasticAnalyzed = false;
+
    // mass matrix stuff
 
    private int myMassVersion = -1;
@@ -1595,36 +1601,45 @@ public class MechSystemSolver {
          return false;
       }
       int velSize = myActiveVelSize;
-      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
-         mySolveMatrix.createCrsBlockSlotMap (
-            Matrix.Partition.Full, velSize, velSize);
-      MechSystem.GpuAssemblyContext ctx =
-         new MechSystem.GpuAssemblyContext (
-            mySolveMatrix, slotMap, mySolveMatrixVersion);
+      // cache the context + cuDSS solver; only the analyze (the costly step) is
+      // reused -- the stiffness values are re-assembled and re-uploaded each step.
+      if (myFemElasticContext == null ||
+          myFemElasticVersion != mySolveMatrixVersion) {
+         SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+            mySolveMatrix.createCrsBlockSlotMap (
+               Matrix.Partition.Full, velSize, velSize);
+         myFemElasticContext =
+            new MechSystem.GpuAssemblyContext (
+               mySolveMatrix, slotMap, mySolveMatrixVersion);
+         if (myFemElasticSolver != null) {
+            myFemElasticSolver.dispose();
+         }
+         myFemElasticSolver = new CuDssSolver();
+         myFemElasticVersion = mySolveMatrixVersion;
+         myFemElasticAnalyzed = false;
+      }
+      MechSystem.GpuAssemblyContext ctx = myFemElasticContext;
       ctx.clearCrsValues();
       ctx.clearCrsValueContributions();
       // raw stiffness K (scale 1); null RHS vector -> contributions only
       if (!mySys.assembleGpuPosJacobianCrsValueContributions (ctx, null, 1.0)) {
          return false;
       }
-      CuDssSolver scratch = new CuDssSolver();
-      try {
+      if (!myFemElasticAnalyzed) {
          int nnz = ctx.getCrsValues().length;
-         scratch.analyze (
+         myFemElasticSolver.analyze (
             new double[nnz], ctx.getZeroBasedCrsColIdxs(),
             ctx.getZeroBasedCrsRowOffs(), velSize, Matrix.INDEFINITE);
-         scratch.clearDeviceValues();
-         addStiffnessDeviceValues (scratch, ctx);
-         double[] in = new double[velSize];
-         double[] out = new double[velSize];
-         System.arraycopy (u.getBuffer(), 0, in, 0, velSize);
-         scratch.multiply (in, out);
-         fout.setSize (velSize);
-         System.arraycopy (out, 0, fout.getBuffer(), 0, velSize);
+         myFemElasticAnalyzed = true;
       }
-      finally {
-         scratch.dispose();
-      }
+      myFemElasticSolver.clearDeviceValues();
+      addStiffnessDeviceValues (myFemElasticSolver, ctx);
+      double[] in = new double[velSize];
+      double[] out = new double[velSize];
+      System.arraycopy (u.getBuffer(), 0, in, 0, velSize);
+      myFemElasticSolver.multiply (in, out);
+      fout.setSize (velSize);
+      System.arraycopy (out, 0, fout.getBuffer(), 0, velSize);
       return true;
    }
 
@@ -1637,8 +1652,26 @@ public class MechSystemSolver {
    // computed up front so a failure leaves the host path intact -- the elastic
    // force is never dropped. The caller MUST reset the flag (finally) after its
    // updateForces.
+   // OPT-IN (off by default): measurement showed the device FEM elastic force is a
+   // per-step perf REGRESSION -- it re-assembles and re-uploads the stiffness the
+   // main matrix factor already assembles (+~13ms/step at 1200 DOF), and at these
+   // scales the cuDSS path is already slower than Pardiso. Kept behind a flag as a
+   // validated foundation; a net win would need the force SpMV to SHARE the matrix
+   // factor's device stiffness (assemble once) and only helps at large scale.
+   private static boolean enableGpuFemElasticForce =
+      Boolean.getBoolean ("artisynth.gpuAssembly.femForce");
+
+   public static void setGpuFemElasticForceEnabled (boolean enable) {
+      enableGpuFemElasticForce = enable;
+   }
+
+   public static boolean getGpuFemElasticForceEnabled() {
+      return enableGpuFemElasticForce;
+   }
+
    private VectorNd beginDeviceFemElasticForce (int vsize) {
-      if (!enableGpuAssembly() || !(mySys instanceof MechSystemBase)) {
+      if (!enableGpuFemElasticForce ||
+          !enableGpuAssembly() || !(mySys instanceof MechSystemBase)) {
          return null;
       }
       VectorNd uDisp = new VectorNd (vsize);
@@ -5684,6 +5717,13 @@ public class MechSystemSolver {
          myKktVelJacRhsContext = null;
          myKktVelJacRhsVersion = -1;
          myKktVelJacRhsAnalyzed = false;
+      }
+      if (myFemElasticSolver != null) {
+         myFemElasticSolver.dispose();
+         myFemElasticSolver = null;
+         myFemElasticContext = null;
+         myFemElasticVersion = -1;
+         myFemElasticAnalyzed = false;
       }
       if (myRBSolver != null) {
          myRBSolver.dispose();

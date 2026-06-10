@@ -911,10 +911,19 @@ public class FemModel3dTest extends UnitTest {
       if (!maspack.solvers.CuDssSolver.isAvailable()) {
          return;
       }
-      double[] gpu =
-         runConstrainedLinearElasticStep (maspack.solvers.SparseSolverId.CuDss);
-      double[] cpu =
-         runConstrainedLinearElasticStep (maspack.solvers.SparseSolverId.Pardiso);
+      // the device FEM elastic-force RHS path is opt-in (a perf regression, kept
+      // as a validated foundation); enable it so this test exercises it
+      double[] gpu, cpu;
+      MechSystemSolver.setGpuFemElasticForceEnabled (true);
+      try {
+         gpu = runConstrainedLinearElasticStep (
+            maspack.solvers.SparseSolverId.CuDss);
+         cpu = runConstrainedLinearElasticStep (
+            maspack.solvers.SparseSolverId.Pardiso);
+      }
+      finally {
+         MechSystemSolver.setGpuFemElasticForceEnabled (false);
+      }
       double max = maxVelDiff (gpu, cpu);
       double ref = maxAbs (cpu);
       double tol = Math.max (1e-9, 1e-7*ref);
