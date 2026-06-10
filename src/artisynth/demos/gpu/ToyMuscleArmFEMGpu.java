@@ -1,8 +1,9 @@
-package artisynth.demos.tutorial;
+package artisynth.demos.gpu;
 
 import java.awt.Color;
 import java.io.IOException;
 
+import artisynth.demos.tutorial.ToyMuscleArmFEM;
 import artisynth.core.femmodels.FemModel3d;
 import artisynth.core.femmodels.FemNode3d;
 import artisynth.core.materials.LinearMaterial;
@@ -14,6 +15,7 @@ import maspack.matrix.RigidTransform3d;
 import maspack.properties.PropertyMode;
 import maspack.render.RenderProps;
 import maspack.solvers.SparseSolverId;
+import maspack.util.PathFinder;
 
 /**
  * GPU-assembly test variant of {@link ToyMuscleArmFEM}.
@@ -34,7 +36,7 @@ import maspack.solvers.SparseSolverId;
  *
  * <p>Launch headless, e.g.:
  * <pre>
- *   artisynth -noGui -model artisynth.demos.tutorial.ToyMuscleArmFEMGpu \
+ *   artisynth -noGui -model artisynth.demos.gpu.ToyMuscleArmFEMGpu \
  *             -playFor 0.05 -exitOnBreak
  * </pre>
  * Add {@code -Dartisynth.gpuAssembly.status=true} to see per-solve routing.
@@ -48,6 +50,14 @@ public class ToyMuscleArmFEMGpu extends ToyMuscleArmFEM {
    protected double endEffZ = 1.26;
    // attach link1 FEM nodes whose z is within this distance of the tip face
    protected double tipAttachZTol = 0.03;
+
+   public ToyMuscleArmFEMGpu() {
+      // ToyMuscleArmFEM resolves its mesh data directory from the runtime
+      // class (PathFinder.getSourceRelativePath(this, "data/")); since this
+      // subclass lives in a different package, point geodir back at the base
+      // class's data directory (artisynth/demos/tutorial/data).
+      geodir = PathFinder.getSourceRelativePath (ToyMuscleArmFEM.class, "data/");
+   }
 
    @Override
    public void build (String[] args) throws IOException {

@@ -1,4 +1,4 @@
-package artisynth.demos.tutorial;
+package artisynth.demos.gpu;
 
 import java.awt.Color;
 
@@ -37,7 +37,7 @@ import maspack.solvers.SparseSolverId;
  * the ONLY thing keeping the assembly off the GPU.
  *
  * <pre>
- *   artisynth -noGui -model artisynth.demos.tutorial.FemBeamWithActiveBody \
+ *   artisynth -noGui -model artisynth.demos.gpu.FemBeamWithActiveBody \
  *             -playFor 0.05 -exitOnBreak
  * </pre>
  */
