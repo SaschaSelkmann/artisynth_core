@@ -2708,6 +2708,21 @@ PointAttachable, ConnectableBody {
          getAugmentingMaterials()) && allElementsNonCorotatedLinear();
    }
 
+   // True when this FEM's internal elastic force can be computed on the device as
+   // a stiffness SpMV K*u: the (constant) non-corotated linear GPU path, with no
+   // frame-relative coordinates (the displacement is taken in world coords). Used
+   // to gate the device FEM-force RHS path (task 16).
+   public boolean isGpuElasticForceEligible() {
+      return hasConstantStiffness() && !usingAttachedRelativeFrame();
+   }
+
+   @Override
+   public boolean isGpuElasticForceEffector() {
+      // this FEM's position Jacobian is its (non-corotated, constant) internal
+      // stiffness, whose elastic force the device computes as K*u
+      return isGpuElasticForceEligible();
+   }
+
    @Override
    protected void invalidateStressAndMaybeStiffness() {
       myStressesValidP = false;
@@ -2727,6 +2742,10 @@ PointAttachable, ConnectableBody {
          updateStressAndStiffness();
       }
       boolean hasGravity = !myGravity.equals(Vector3d.ZERO);
+      // The solver sets this around its force gathering when it will add this
+      // FEM's internal elastic force (K*u) to the RHS on the device instead.
+      boolean gpuElastic =
+         MechSystemSolver.isGpuFemElasticForceActive() && hasConstantStiffness();
       Vector3d fk = new Vector3d(); // stiffness force
       Vector3d fd = new Vector3d(); // damping force
       Vector3d md = new Vector3d(); // mass damping (used with attached frames)
@@ -2814,8 +2833,14 @@ PointAttachable, ConnectableBody {
                else {
                   fd.scaledAdd(myMassDamping * n.getMass(), n.getVelocity(), fd);
                }
-               n.subForce(fk);
-               n.subForce(fd);             
+               // When the GPU device path computes the FEM internal elastic force
+               // as a SpMV (K*u) and adds it to the solve RHS, skip applying it
+               // here to avoid double-counting; the velocity/mass damping (fd) is
+               // unaffected. Gated to this FEM being GPU non-corotated eligible.
+               if (!gpuElastic) {
+                  n.subForce(fk);
+               }
+               n.subForce(fd);
             }
          }
       }

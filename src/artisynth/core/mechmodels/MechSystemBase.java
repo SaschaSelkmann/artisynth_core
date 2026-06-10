@@ -1018,7 +1018,39 @@ public abstract class MechSystemBase extends RenderableModelBase
       int idx = 0;
       for (int i=0; i<myNumActive; i++) {
          idx = myDynamicComponents.get(i).getForce (buf, idx);
-      }      
+      }
+   }
+
+   // GPU FEM element-evaluation (task 16): gathers the rest displacement u
+   // (current - rest position) of every active dynamic component into u, but ONLY
+   // if EVERY active component is GPU-elastic eligible (a non-corotated linear FEM
+   // node). Returns the number of DOFs filled (== active vel size) when eligible,
+   // or -1 otherwise (any non-FEM-elastic active component -> the whole system is
+   // ineligible and the caller keeps the host force path). This lets the solver
+   // add the FEM internal elastic force as a device SpMV K*u to the RHS.
+   public int getActiveElasticGpuDisplacement (VectorNd u) {
+      updateDynamicComponentLists();
+      updateForceComponentList();
+      // The device force K*u is valid only if the assembled position Jacobian is
+      // exactly the FEM stiffness, i.e. EVERY force effector is a GPU-elastic FEM
+      // (no springs/muscles/etc. contributing to the position Jacobian).
+      for (int i=0; i<myForceEffectors.size(); i++) {
+         if (!myForceEffectors.get(i).isGpuElasticForceEffector()) {
+            return -1;
+         }
+      }
+      u.setSize (myActiveVelStateSize);
+      double[] buf = u.getBuffer();
+      int idx = 0;
+      for (int i=0; i<myNumActive; i++) {
+         int nidx =
+            myDynamicComponents.get(i).getElasticGpuRestDisplacement (buf, idx);
+         if (nidx < 0) {
+            return -1;
+         }
+         idx = nidx;
+      }
+      return idx;
    }
 
    /** 

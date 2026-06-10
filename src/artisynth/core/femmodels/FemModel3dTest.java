@@ -867,6 +867,72 @@ public class FemModel3dTest extends UnitTest {
          " (ref="+ref+", tipZ="+tipZ+")");
    }
 
+   // End-to-end validation of the device FEM elastic-force RHS path (task 16):
+   // a PURE non-corotated FEM beam (x-min fixed, no rigid bodies/springs, so every
+   // active DOF is a GPU-elastic FEM node) sags under gravity with Constrained
+   // BackwardEuler. On cuDSS the internal elastic force is computed on the device
+   // (K*u SpMV) and added to the RHS while the host skips it; on Pardiso the host
+   // computes it normally. The two must match -- this catches any double-count or
+   // RHS scale/sign error in the wiring (FemModel3d.updateNodeForces skip +
+   // MechSystemSolver device injection).
+   private double[] runConstrainedLinearElasticStep (
+      maspack.solvers.SparseSolverId solverId) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.2, 0.2, 8, 2, 2);
+      LinearMaterial mat = new LinearMaterial (20000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.05);
+      fem.setParticleDamping (0.1);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      double h = 0.01;
+      for (int i=0; i<20; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testConstrainedLinearElasticEquivalence() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu =
+         runConstrainedLinearElasticStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu =
+         runConstrainedLinearElasticStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (ref < 1e-4) {
+         throw new TestException (
+            "constrained linear-elastic beam barely moved (ref="+ref+
+            "); device-force RHS path not meaningfully exercised");
+      }
+      if (max > tol) {
+         throw new TestException (
+            "constrained linear-elastic (device FEM force) cuDSS vs Pardiso "+
+            "mismatch: max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "constrained linear-elastic device-force cuDSS equivalence ok: max="+
+         max+" (ref="+ref+")");
+   }
+
    // Validates the device FEM internal-force SpMV (task 16 building block): the
    // internal elastic force is K*u (K = the device-assembled position Jacobian,
    // u = displacement from rest). Builds a pure non-corotated FEM beam (x-min
@@ -1991,6 +2057,7 @@ public class FemModel3dTest extends UnitTest {
       testInertialDampingEquivalence();
       testCorotatedLinearEquivalence();
       testDeviceFemElasticForce();
+      testConstrainedLinearElasticEquivalence();
       testWrapAttachEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();

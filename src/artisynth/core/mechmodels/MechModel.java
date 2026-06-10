@@ -2539,6 +2539,13 @@ TransformableGeometry, ScalableUnits {
          // nothing needed
       }
 
+      @Override
+      public boolean isGpuElasticForceEffector() {
+         // gravity has an empty position Jacobian, so it does not pollute the
+         // FEM stiffness K used by the device FEM elastic-force path (task 16)
+         return true;
+      }
+
       public boolean assemblePosJacobianCrsValues (
          MechSystem.GpuAssemblyContext context, double s) {
          return true;

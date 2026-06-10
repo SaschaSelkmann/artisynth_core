@@ -1133,6 +1133,19 @@ public class FemNode3d extends FemNode implements Boundable {
       return myRest;
    }
 
+   @Override
+   public int getElasticGpuRestDisplacement (double[] buf, int idx) {
+      FemModel3d fem = findFem();
+      if (fem == null || !fem.isGpuElasticForceEligible()) {
+         return -1;
+      }
+      Point3d pos = getPosition();
+      buf[idx]   = pos.x - myRest.x;
+      buf[idx+1] = pos.y - myRest.y;
+      buf[idx+2] = pos.z - myRest.z;
+      return idx + 3;
+   }
+
    public Point3d getRenderPosition() {
       Point3d pos =
          new Point3d (myRenderCoords[0], myRenderCoords[1], myRenderCoords[2]);

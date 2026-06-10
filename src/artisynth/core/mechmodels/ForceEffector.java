@@ -87,6 +87,17 @@ public interface ForceEffector {
    }
 
    /**
+    * GPU FEM element-evaluation support (task 16): true if this effector's entire
+    * position-Jacobian contribution is a FEM internal stiffness whose elastic
+    * force can be computed on the device as K*u. Used to gate the device FEM
+    * force RHS path: it engages only when EVERY force effector reports true (so
+    * the assembled position Jacobian is exactly that stiffness). Default: false.
+    */
+   public default boolean isGpuElasticForceEffector() {
+      return false;
+   }
+
+   /**
     * Optionally assembles the scaled position Jacobian as CRS slot/value
     * contributions supplied by a GPU assembly context. The default
     * implementation reports that this effector does not support contribution

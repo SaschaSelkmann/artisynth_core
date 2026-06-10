@@ -90,6 +90,20 @@ public class MechSystemSolver {
       Boolean.getBoolean ("artisynth.gpuAssembly.directCrs");
    private static boolean myGpuAssemblyRequireFull =
       Boolean.getBoolean ("artisynth.gpuAssembly.requireFull");
+   // Set by an integrator step (around its force gathering) when it will add the
+   // FEM internal elastic force to the RHS on the device (computeDeviceFemElastic
+   // Force); FemModel3d.updateNodeForces reads it to skip applying that force on
+   // the host (avoiding a double count). Single-threaded solve; set/reset within
+   // one step.
+   private static boolean ourGpuFemElasticForceActive = false;
+
+   public static boolean isGpuFemElasticForceActive() {
+      return ourGpuFemElasticForceActive;
+   }
+
+   private static void setGpuFemElasticForceActive (boolean active) {
+      ourGpuFemElasticForceActive = active;
+   }
    public boolean printChecksums = false;
    public boolean printPosChecksum = false;
    public boolean printVelChecksum = false;
@@ -1614,6 +1628,32 @@ public class MechSystemSolver {
       return true;
    }
 
+   // Task 16: if every active component is a GPU-non-corotated-linear FEM node,
+   // compute that FEM's internal elastic force on the device (K*u SpMV) and set
+   // the skip flag so FemModel3d.updateNodeForces leaves it off the host force.
+   // Returns the (h-unscaled) elastic force for the caller to add h*f to the RHS
+   // (after its getActiveForces), or null if not eligible (then nothing is
+   // skipped and the host computes the force as usual). The device force is
+   // computed up front so a failure leaves the host path intact -- the elastic
+   // force is never dropped. The caller MUST reset the flag (finally) after its
+   // updateForces.
+   private VectorNd beginDeviceFemElasticForce (int vsize) {
+      if (!enableGpuAssembly() || !(mySys instanceof MechSystemBase)) {
+         return null;
+      }
+      VectorNd uDisp = new VectorNd (vsize);
+      if (((MechSystemBase)mySys).getActiveElasticGpuDisplacement (uDisp)
+             != vsize) {
+         return null;
+      }
+      VectorNd fdev = new VectorNd (vsize);
+      if (!computeDeviceFemElasticForce (uDisp, fdev)) {
+         return null;
+      }
+      setGpuFemElasticForceActive (true);
+      return fdev;
+   }
+
    private boolean addDeviceKktVelJacobianRhs (
       VectorNd bf, VectorNd vel0, int velSize, double a2, double a3) {
 
@@ -2077,8 +2117,16 @@ public class MechSystemSolver {
       updateSolveMatrixStructure();
       myC.setSize (mySolveMatrix.rowSize()); 
 
+      // Task 16: device FEM internal elastic force (K*u SpMV added to the RHS,
+      // host elastic force skipped). null when not eligible -> host path.
+      VectorNd femElasticForce = beginDeviceFemElasticForce (vsize);
       singleStepAuxComponents (t0, t1);
-      mySys.updateForces (t1);
+      try {
+         mySys.updateForces (t1);
+      }
+      finally {
+         setGpuFemElasticForceActive (false);
+      }
 
       // b = M v
       mySys.getActiveVelState (myU);
@@ -2087,6 +2135,10 @@ public class MechSystemSolver {
       mySys.getActiveForces (myF);
       myF.add (myMassForces);
       myB.scaledAdd (h, myF, myB);
+      if (femElasticForce != null) {
+         // add h * (df/dx * u) = h * (the skipped FEM internal elastic force)
+         myB.scaledAdd (h, femElasticForce, myB);
+      }
 
       long tBuildStart =
          myGpuAssemblyProfilingEnabled ? System.nanoTime() : 0;
@@ -4712,7 +4764,15 @@ public class MechSystemSolver {
          System.out.println ("  updateConstraints=" + timer.result(1));
          timer.start();
       }
-      mySys.updateForces (t1);
+      // Task 16: device FEM internal elastic force (K*u SpMV added to the RHS,
+      // host elastic force skipped). null when not eligible -> host path.
+      VectorNd femElasticForce = beginDeviceFemElasticForce (myActiveVelSize);
+      try {
+         mySys.updateForces (t1);
+      }
+      finally {
+         setGpuFemElasticForceActive (false);
+      }
       if (profileConstrainedBE) {
          timer.stop();
          System.out.println ("  updateForces=" + timer.result(1));
@@ -4722,11 +4782,15 @@ public class MechSystemSolver {
       // b = M u
       mySys.getActiveVelState (myU);
       mulActiveInertias (myB, myU);
-      // b += h f 
+      // b += h f
 
       mySys.getActiveForces (myF);
       myF.add (myMassForces);
       myB.scaledAdd (h, myF, myB);
+      if (femElasticForce != null) {
+         // add h * (df/dx * u) = h * (the skipped FEM internal elastic force)
+         myB.scaledAdd (h, femElasticForce, myB);
+      }
 
       updateConstraintMatrices (h, usingImplicitFriction());
 
