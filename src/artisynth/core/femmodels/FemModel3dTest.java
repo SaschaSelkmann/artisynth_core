@@ -867,6 +867,95 @@ public class FemModel3dTest extends UnitTest {
          " (ref="+ref+", tipZ="+tipZ+")");
    }
 
+   // Validates the device FEM internal-force SpMV (task 16 building block): the
+   // internal elastic force is K*u (K = the device-assembled position Jacobian,
+   // u = displacement from rest). Builds a pure non-corotated FEM beam (x-min
+   // fixed), DISPLACES the free nodes off rest with zero velocity and no gravity
+   // -- so the only active force is the elastic force = (df/dx)*u -- and checks
+   // that MechSystemSolver.computeDeviceFemElasticForce(u) reproduces the host
+   // getActiveForces. This proves the displacement/sign/device-SpMV before the
+   // force offload is wired into the solve RHS.
+   private void testDeviceFemElasticForce() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, 0);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (maspack.solvers.SparseSolverId.CuDss);
+      mech.addModel (fem);
+      // one step to build the solve structure + GPU assembly context
+      mech.preadvance (0, 0.001, 0);
+      mech.advance (0, 0.001, 0);
+
+      // displace every free node off rest (zero velocity) so u != 0
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.isActive()) {
+            Point3d p = new Point3d (node.getRestPosition());
+            p.z += 0.03 * (p.x + 0.5);   // a bending-like displacement
+            p.y += 0.01;
+            node.setPosition (p);
+         }
+      }
+      mech.updateForces (0.001);
+
+      int n = mech.getActiveVelStateSize();
+      VectorNd fHost = new VectorNd (n);
+      mech.getActiveForces (fHost);
+
+      // u (displacement from rest) aligned with the active-DOF ordering
+      VectorNd u = new VectorNd (n);
+      for (FemNode3d node : fem.getNodes()) {
+         int bi = node.getSolveIndex();
+         if (node.isActive() && bi != -1) {
+            Vector3d d = new Vector3d (node.getPosition());
+            d.sub (node.getRestPosition());
+            u.set (3*bi,   d.x);
+            u.set (3*bi+1, d.y);
+            u.set (3*bi+2, d.z);
+         }
+      }
+
+      VectorNd fDev = new VectorNd();
+      boolean ok = mech.getSolver().computeDeviceFemElasticForce (u, fDev);
+      if (!ok) {
+         throw new TestException (
+            "computeDeviceFemElasticForce: device posJac assembly incomplete");
+      }
+      // f = (df/dx)*u = the active elastic force, so fDev should match fHost
+      double ref = maxAbs (fHost.getBuffer());
+      if (ref < 1e-6) {
+         throw new TestException (
+            "device FEM elastic force: host force ~0 (displacement too small?)");
+      }
+      double dPlus = 0, dMinus = 0;
+      for (int i=0; i<n; i++) {
+         dPlus  = Math.max (dPlus,  Math.abs (fDev.get(i) - fHost.get(i)));
+         dMinus = Math.max (dMinus, Math.abs (fDev.get(i) + fHost.get(i)));
+      }
+      double d = Math.min (dPlus, dMinus);
+      double tol = 1e-7 * ref;
+      if (d > tol) {
+         throw new TestException (
+            "device FEM elastic force mismatch: min(+/-)="+d+
+            " (dPlus="+dPlus+", dMinus="+dMinus+", tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "device FEM elastic force ok: diff="+d+
+         " (sign="+(dPlus<=dMinus?"+":"-")+", ref="+ref+")");
+   }
+
    private double maxVelDiff (double[] a, double[] b) {
       if (a.length != b.length) {
          throw new TestException (
@@ -1901,6 +1990,7 @@ public class FemModel3dTest extends UnitTest {
       testHingeFemEquivalence();
       testInertialDampingEquivalence();
       testCorotatedLinearEquivalence();
+      testDeviceFemElasticForce();
       testWrapAttachEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();

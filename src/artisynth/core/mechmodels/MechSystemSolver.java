@@ -1562,6 +1562,58 @@ public class MechSystemSolver {
    // contributions (so S's M-block values are unused) and that there are no
    // parametric components (whose fictitious Jacobian forces the GPU
    // contribution path does not compute).
+   // Computes the FEM internal elastic force on the device as a SpMV of the
+   // assembled position-Jacobian stiffness K against the displacement u (= current
+   // pos - rest pos): f = K*u. This is the building block for moving the per-step
+   // host element force loop (FemModel3d.updateStressAndStiffness / updateNode
+   // forces) onto the GPU -- the elastic force is K*u (non-corotated) or
+   // K_warped*x - R*f0 (corotated), and K / K_warped is already device-assembled
+   // by the geometry kernel, so the force is one device SpMV (reusing CuDssSolver.
+   // multiply, exactly as the velocity-Jacobian RHS does). NOT yet wired into the
+   // solve RHS (that needs a coordinated host skip to avoid double-counting); this
+   // method assembles fresh and is used to validate the device force vs the host.
+   // Returns false if the device position Jacobian could not be fully assembled
+   // (e.g. a model the GPU geometry kernel does not cover).
+   public boolean computeDeviceFemElasticForce (VectorNd u, VectorNd fout) {
+      updateStateSizes();
+      updateSolveMatrixStructure();
+      if (!enableGpuAssembly()) {
+         return false;
+      }
+      int velSize = myActiveVelSize;
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+         mySolveMatrix.createCrsBlockSlotMap (
+            Matrix.Partition.Full, velSize, velSize);
+      MechSystem.GpuAssemblyContext ctx =
+         new MechSystem.GpuAssemblyContext (
+            mySolveMatrix, slotMap, mySolveMatrixVersion);
+      ctx.clearCrsValues();
+      ctx.clearCrsValueContributions();
+      // raw stiffness K (scale 1); null RHS vector -> contributions only
+      if (!mySys.assembleGpuPosJacobianCrsValueContributions (ctx, null, 1.0)) {
+         return false;
+      }
+      CuDssSolver scratch = new CuDssSolver();
+      try {
+         int nnz = ctx.getCrsValues().length;
+         scratch.analyze (
+            new double[nnz], ctx.getZeroBasedCrsColIdxs(),
+            ctx.getZeroBasedCrsRowOffs(), velSize, Matrix.INDEFINITE);
+         scratch.clearDeviceValues();
+         addStiffnessDeviceValues (scratch, ctx);
+         double[] in = new double[velSize];
+         double[] out = new double[velSize];
+         System.arraycopy (u.getBuffer(), 0, in, 0, velSize);
+         scratch.multiply (in, out);
+         fout.setSize (velSize);
+         System.arraycopy (out, 0, fout.getBuffer(), 0, velSize);
+      }
+      finally {
+         scratch.dispose();
+      }
+      return true;
+   }
+
    private boolean addDeviceKktVelJacobianRhs (
       VectorNd bf, VectorNd vel0, int velSize, double a2, double a3) {
 
