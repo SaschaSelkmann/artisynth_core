@@ -63,12 +63,6 @@ public class ToyMuscleArmFEMGpu extends ToyMuscleArmFEM {
    public void build (String[] args) throws IOException {
       super.build (args);
 
-      // Reconfigure the FEM material for the GPU linear-elastic kernel path:
-      // non-corotated LinearMaterial with an explicit corotated mode so the flag
-      // is not reset to true when the FEM is (re)attached to the model.
-      retargetFemMaterial (myLink0Fem, link0YoungsModulus, link0PoissonsRatio);
-      retargetFemMaterial (myLink1Fem, link1YoungsModulus, link1PoissonsRatio);
-
       // Route through the GPU device-assembly path.
       myMech.setMatrixSolver (SparseSolverId.CuDss);
       myMech.setIntegrator (
@@ -78,16 +72,27 @@ public class ToyMuscleArmFEMGpu extends ToyMuscleArmFEM {
       addEndEffector();
    }
 
-   protected void retargetFemMaterial (
-      FemModel3d fem, double youngsModulus, double poissonsRatio) {
+   // Give each link FEM a NON-corotated LinearMaterial with an EXPLICIT
+   // corotated mode (the GPU linear-elastic geometry kernel only supports
+   // non-corotated linear material). This must be set at link-creation time:
+   // corotated is an inherited property, so a default LinearMaterial reverts to
+   // corotated=true and a post-super.build mutation does not stick.
+   @Override
+   protected FemModel3d createFemLink (
+      String name, double widthX, double widthY, double lengthZ,
+      int elemX, int elemY, int elemZ, double density,
+      double youngsModulus, double poissonsRatio,
+      double particleDamping, double stiffnessDamping, double zCenter) {
+
+      FemModel3d fem = super.createFemLink (
+         name, widthX, widthY, lengthZ, elemX, elemY, elemZ, density,
+         youngsModulus, poissonsRatio, particleDamping, stiffnessDamping,
+         zCenter);
       LinearMaterial mat =
          new LinearMaterial (youngsModulus, poissonsRatio, /*corotated=*/false);
-      fem.setMaterial (mat);
-      // Pin corotated=false AFTER the material is hosted by the FEM, so the
-      // explicit mode survives property inheritance from the model hierarchy
-      // (setting the mode before setMaterial gets reset to Inherited on attach).
-      mat.setCorotated (false);
       mat.setCorotatedMode (PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      return fem;
    }
 
    protected void addEndEffector() {
