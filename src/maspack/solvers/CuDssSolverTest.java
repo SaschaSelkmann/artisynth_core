@@ -684,11 +684,22 @@ public class CuDssSolverTest extends UnitTest {
             1, 1,
             2, 2
          };
-         int[] blockSlots = {
-             0, -1, -1,  -1, -1, -1,  -1, -1, -1,
-            -1, -1, -1,  -1,  1, -1,  -1, -1, -1,
-            -1, -1, -1,  -1, -1, -1,  -1, -1,  2
-         };
+         // 36-slot stride per pair (row-major rowDim x colDim, max 6x6). All
+         // nodes are free here (dim 3), so only the first 9 entries (the 3x3
+         // block) are used; the rest are unused (-1).
+         int[] blockSlots = new int[3*36];
+         java.util.Arrays.fill (blockSlots, -1);
+         blockSlots[0*36 + 0] = 0;   // pair (0,0) -> K[0,0] at CRS slot 0
+         blockSlots[1*36 + 4] = 1;   // pair (1,1) -> K[1,1] at CRS slot 1
+         blockSlots[2*36 + 8] = 2;   // pair (2,2) -> K[2,2] at CRS slot 2
+         // free-node target dimensions and identity transforms (6x3, top I3)
+         int[] nodeDims = { 3, 3, 3 };
+         double[] nodeTransforms = new double[3*18];
+         for (int n=0; n<3; n++) {
+            nodeTransforms[n*18 + 0] = 1;
+            nodeTransforms[n*18 + 4] = 1;
+            nodeTransforms[n*18 + 8] = 1;
+         }
          double[] elemParams = { 4, 0 };
          double[] elemNodePositions = {
             1, 0, 0,
@@ -705,7 +716,8 @@ public class CuDssSolverTest extends UnitTest {
          s.clearDeviceValues();
          s.addLinearElasticStiffness3ElementGeometryDeviceValues (
             elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
-            elemNaturalGradOffsets, pairNodeIdxs, blockSlots, elemParams,
+            elemNaturalGradOffsets, pairNodeIdxs, blockSlots, nodeDims,
+            nodeTransforms, elemParams,
             elemNodePositions, naturalGrads, ipWeights, 1, 1.0);
          s.factorDeviceValues();
 

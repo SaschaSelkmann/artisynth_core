@@ -1527,6 +1527,8 @@ public class MechSystemSolver {
          ctx.getLinearElasticStiffness3ElementGeometryNaturalGradOffsets(),
          ctx.getLinearElasticStiffness3ElementGeometryPairNodeIdxs(),
          ctx.getLinearElasticStiffness3ElementGeometryBlockSlots(),
+         ctx.getLinearElasticStiffness3ElementGeometryNodeDims(),
+         ctx.getLinearElasticStiffness3ElementGeometryNodeTransforms(),
          ctx.getLinearElasticStiffness3ElementGeometryParams(),
          ctx.getLinearElasticStiffness3ElementGeometryNodePositions(),
          ctx.getLinearElasticStiffness3ElementGeometryNaturalGrads(),
@@ -1625,7 +1627,8 @@ public class MechSystemSolver {
    // marshalling bug and an M-block slot-map error. Isolated: it does not touch
    // the live KKT solve.
    private void verifyKktMDeviceCrsValues (
-      MechSystem.GpuAssemblyContext ctx, double a0, double a1, String phase) {
+      MechSystem.GpuAssemblyContext ctx, double a0, double a1,
+      boolean kktMBlockAssembledInS, String phase) {
 
       int[] rowOffs = ctx.getZeroBasedCrsRowOffs();
       int n = rowOffs.length - 1;
@@ -1645,20 +1648,57 @@ public class MechSystemSolver {
          scratch.dispose();
       }
 
-      // CPU reference into the context's own CRS value array, same scales (a0
-      // for the velocity Jacobian, a1 for the position Jacobian) plus mass.
-      ctx.clearCrsValues();
-      boolean complete = true;
-      if (a0 != 0 && a1 != 0) {
-         complete &= mySys.assembleGpuVelJacobianCrsValues (ctx, a0);
-         complete &= mySys.assembleGpuPosJacobianCrsValues (ctx, a1);
+      // CPU reference = the live, already-reduced solve matrix M block — the
+      // exact matrix the host KKT path factors. By this point the host has
+      // assembled a0*velJac + a1*posJac + mass into S AND applied the
+      // attachment reduction (addAttachmentJacobian, called from
+      // MechSystemBase.addVel/PosJacobian). Reading S directly is therefore a
+      // true device-vs-CPU check that includes the master-slave reduction (the
+      // *CrsValues re-assembly used previously is UNREDUCED, so it cannot
+      // validate the active-master attachment path). Falls back to the
+      // re-assembled reference only when the host velJac RHS ran on the device
+      // (gpuVel true) and S's M block was therefore left unassembled.
+      double[] cpuRef;
+      SparseNumberedBlockMatrix S = ctx.getMatrix();
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap = ctx.getSlotMap();
+      if (kktMBlockAssembledInS) {
+         cpuRef = new double[nnz];
+         int nrows = S.numBlockRows();
+         for (int bi=0; bi<nrows; bi++) {
+            for (MatrixBlock blk=S.firstBlockInRow(bi);
+                 blk != null; blk=blk.next()) {
+               int bn = blk.getBlockNumber();
+               if (bn < 0 || !slotMap.hasBlockSlots (bn)) {
+                  continue;
+               }
+               int rs = blk.rowSize();
+               int cs = blk.colSize();
+               for (int i=0; i<rs; i++) {
+                  for (int j=0; j<cs; j++) {
+                     int slot = slotMap.getBlockValueSlot (bn, i, j);
+                     if (slot >= 0) {
+                        cpuRef[slot] = blk.get (i, j);
+                     }
+                  }
+               }
+            }
+         }
       }
-      complete &= addActiveMassMatrixCrsValues (ctx);
-      if (!complete) {
-         maybeWarnGpuAssemblyCrsVerifyIncomplete (phase);
-         return;
+      else {
+         ctx.clearCrsValues();
+         boolean complete = true;
+         if (a0 != 0 && a1 != 0) {
+            complete &= mySys.assembleGpuVelJacobianCrsValues (ctx, a0);
+            complete &= mySys.assembleGpuPosJacobianCrsValues (ctx, a1);
+         }
+         complete &= addActiveMassMatrixCrsValues (ctx);
+         if (!complete) {
+            maybeWarnGpuAssemblyCrsVerifyIncomplete (phase);
+            return;
+         }
+         cpuRef = ctx.getCrsValues();
       }
-      checkDeviceCrsMatch (phase, gpuVals, ctx.getCrsValues());
+      checkDeviceCrsMatch (phase, gpuVals, cpuRef);
    }
 
    private boolean verifyGpuVelJacobianCrs (double h, String phase) {
@@ -2996,7 +3036,7 @@ public class MechSystemSolver {
                   myKKTSolver, S, velSize, a0, a1);
             if (verifyGpuAssemblyCrs && kktMDeviceContext != null) {
                verifyKktMDeviceCrsValues (
-                  kktMDeviceContext, a0, a1, "kktFactor");
+                  kktMDeviceContext, a0, a1, !gpuVel, "kktFactor");
             }
             if (myHybridSolveP && !analyze && myNT.colSize() == 0) {
                if (profileKKTSolveTime|profileImplicitFriction) {
@@ -3052,6 +3092,8 @@ public class MechSystemSolver {
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNaturalGradOffsets(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryPairNodeIdxs(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryBlockSlots(),
+                      kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNodeDims(),
+                      kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNodeTransforms(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryParams(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNodePositions(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNaturalGrads(),
@@ -3142,6 +3184,8 @@ public class MechSystemSolver {
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNaturalGradOffsets(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryPairNodeIdxs(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryBlockSlots(),
+                      kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNodeDims(),
+                      kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNodeTransforms(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryParams(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNodePositions(),
                       kktMDeviceContext.getLinearElasticStiffness3ElementGeometryNaturalGrads(),

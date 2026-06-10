@@ -113,7 +113,8 @@ public:
       const int* elemNodeCounts, const int* elemNodeOffsets,
       const int* elemPairOffsets, const int* elemIpOffsets,
       const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
-      const int* blockSlots, const double* elemParams,
+      const int* blockSlots, const int* nodeDims,
+      const double* nodeTransforms, const double* elemParams,
       const double* elemNodePositions, const double* naturalGrads,
       const double* ipWeights, int nelems, double scale);
    int addDilationalStiffness3ElementDeviceValues (

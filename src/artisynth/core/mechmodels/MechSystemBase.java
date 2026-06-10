@@ -39,6 +39,7 @@ import maspack.util.Range;
 import maspack.util.EnumRange;
 import artisynth.core.mechmodels.MechSystemSolver.PosStabilization;
 import artisynth.core.mechmodels.MechSystemSolver.Integrator;
+import artisynth.core.femmodels.FemNode3d;
 import artisynth.core.modelbase.*;
 import artisynth.core.util.ArtisynthIO;
 import artisynth.core.util.TimeBase;
@@ -2409,11 +2410,36 @@ public abstract class MechSystemBase extends RenderableModelBase
          return false;
       }
       for (int i=0; i<myAttachments.size(); i++) {
-         for (DynamicComponent m : myAttachments.get(i).getMasters()) {
+         DynamicAttachment at = myAttachments.get(i);
+         boolean hasActiveMaster = false;
+         for (DynamicComponent m : at.getMasters()) {
             if (m.isActive()) {
-               return true;
+               hasActiveMaster = true;
+               break;
             }
          }
+         // An active-master attachment normally forces CPU assembly (the
+         // G^T K G reduction onto active master DOFs). The GPU now performs
+         // this reduction at element-scatter time for the supported case
+         // (PointFrameAttachment, FemNode3d slave, active Frame master): the
+         // FEM linear-elastic geometry kernel scatters T_i K_ij T_j^T directly
+         // onto the master block. Other active-master attachments still fall
+         // back to the host.
+         if (hasActiveMaster && !isGpuReducibleActiveAttachment (at)) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   // True for an active-master attachment whose stiffness reduction the GPU
+   // linear-elastic geometry kernel handles (addReducedMaterialStiffness3Block):
+   // a PointFrameAttachment with a FemNode3d slave and an active Frame master.
+   static boolean isGpuReducibleActiveAttachment (DynamicAttachment at) {
+      if (at instanceof PointFrameAttachment) {
+         PointFrameAttachment pfa = (PointFrameAttachment)at;
+         return (pfa.getSlave() instanceof FemNode3d &&
+                 pfa.getFrame() != null && pfa.getFrame().isActive());
       }
       return false;
    }

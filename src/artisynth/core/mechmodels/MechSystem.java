@@ -85,6 +85,11 @@ public interface MechSystem {
       private int[] myLinearElasticGeometry3ElemNaturalGradOffsets;
       private int[] myLinearElasticGeometry3PairNodeIdxs;
       private int[] myLinearElasticGeometry3ElemBlockSlots;
+      // Per-element-node master-slave reduction data: target block dimension
+      // (3 free / 6 slave) and the 6x3 transform T (I3 free / H slave),
+      // row-major in an 18-double stride. See addReducedMaterialStiffness3Block.
+      private int[] myLinearElasticGeometry3NodeDims;
+      private double[] myLinearElasticGeometry3NodeTransforms;
       private double[] myLinearElasticGeometry3ElemParams;
       private double[] myLinearElasticGeometry3ElemNodePositions;
       private double[] myLinearElasticGeometry3NaturalGrads;
@@ -174,6 +179,8 @@ public interface MechSystem {
          myLinearElasticGeometry3ElemNaturalGradOffsets = new int[] { 0 };
          myLinearElasticGeometry3PairNodeIdxs = new int[0];
          myLinearElasticGeometry3ElemBlockSlots = new int[0];
+         myLinearElasticGeometry3NodeDims = new int[0];
+         myLinearElasticGeometry3NodeTransforms = new double[0];
          myLinearElasticGeometry3ElemParams = new double[0];
          myLinearElasticGeometry3ElemNodePositions = new double[0];
          myLinearElasticGeometry3NaturalGrads = new double[0];
@@ -777,7 +784,8 @@ public interface MechSystem {
       public void addLinearElasticStiffness3ElementGeometryCrsValueContributions (
          int[] elemNodeCounts, int[] elemNodeOffsets, int[] elemPairOffsets,
          int[] elemIpOffsets, int[] elemNaturalGradOffsets,
-         int[] pairNodeIdxs, int[] blockSlots, double[] elemParams,
+         int[] pairNodeIdxs, int[] blockSlots, int[] nodeDims,
+         double[] nodeTransforms, double[] elemParams,
          double[] elemNodePositions, double[] naturalGrads,
          double[] ipWeights, int nelems) {
 
@@ -825,7 +833,13 @@ public interface MechSystem {
             2*pairBase, 2*npairs);
          System.arraycopy (
             blockSlots, 0, myLinearElasticGeometry3ElemBlockSlots,
-            9*pairBase, 9*npairs);
+            36*pairBase, 36*npairs);
+         System.arraycopy (
+            nodeDims, 0, myLinearElasticGeometry3NodeDims,
+            nodeBase, nnodes);
+         System.arraycopy (
+            nodeTransforms, 0, myLinearElasticGeometry3NodeTransforms,
+            18*nodeBase, 18*nnodes);
          System.arraycopy (
             elemNodePositions, 0, myLinearElasticGeometry3ElemNodePositions,
             3*nodeBase, 3*nnodes);
@@ -880,6 +894,12 @@ public interface MechSystem {
             myLinearElasticGeometry3ElemNodePositions =
                Arrays.copyOf (
                   myLinearElasticGeometry3ElemNodePositions, 3*newCap);
+            myLinearElasticGeometry3NodeDims =
+               Arrays.copyOf (
+                  myLinearElasticGeometry3NodeDims, newCap);
+            myLinearElasticGeometry3NodeTransforms =
+               Arrays.copyOf (
+                  myLinearElasticGeometry3NodeTransforms, 18*newCap);
          }
          if (myLinearElasticGeometry3PairNodeIdxs.length < 2*npairs) {
             int newCap = Math.max (
@@ -893,7 +913,7 @@ public interface MechSystem {
                   myLinearElasticGeometry3PairNodeIdxs, 2*newCap);
             myLinearElasticGeometry3ElemBlockSlots =
                Arrays.copyOf (
-                  myLinearElasticGeometry3ElemBlockSlots, 9*newCap);
+                  myLinearElasticGeometry3ElemBlockSlots, 36*newCap);
          }
          if (myLinearElasticGeometry3IpWeights.length < nips) {
             int newCap = Math.max (
@@ -1209,6 +1229,14 @@ public interface MechSystem {
 
       public int[] getLinearElasticStiffness3ElementGeometryBlockSlots() {
          return myLinearElasticGeometry3ElemBlockSlots;
+      }
+
+      public int[] getLinearElasticStiffness3ElementGeometryNodeDims() {
+         return myLinearElasticGeometry3NodeDims;
+      }
+
+      public double[] getLinearElasticStiffness3ElementGeometryNodeTransforms() {
+         return myLinearElasticGeometry3NodeTransforms;
       }
 
       public double[] getLinearElasticStiffness3ElementGeometryParams() {

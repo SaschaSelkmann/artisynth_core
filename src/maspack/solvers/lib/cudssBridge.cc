@@ -60,7 +60,8 @@ extern "C" void addLinearElasticStiffness3ElementGeometry_launch (
    int nelems, const int* elemNodeCounts, const int* elemNodeOffsets,
    const int* elemPairOffsets, const int* elemIpOffsets,
    const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
-   const int* blockSlots, const double* elemParams,
+   const int* blockSlots, const int* nodeDims, const double* nodeTransforms,
+   const double* elemParams,
    const double* elemNodePositions, const double* naturalGrads,
    const double* ipWeights, double globalScale, double* crsVals,
    cudaStream_t stream);
@@ -987,7 +988,8 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
    const int* elemNodeCounts, const int* elemNodeOffsets,
    const int* elemPairOffsets, const int* elemIpOffsets,
    const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
-   const int* blockSlots, const double* elemParams,
+   const int* blockSlots, const int* nodeDims, const double* nodeTransforms,
+   const double* elemParams,
    const double* elemNodePositions, const double* naturalGrads,
    const double* ipWeights, int nelems, double scale) {
 
@@ -1013,15 +1015,18 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
    int *elemNodeCountsD = nullptr, *elemNodeOffsetsD = nullptr;
    int *elemPairOffsetsD = nullptr, *elemIpOffsetsD = nullptr;
    int *elemNaturalGradOffsetsD = nullptr;
-   int *pairNodeIdxsD = nullptr, *blockSlotsD = nullptr;
+   int *pairNodeIdxsD = nullptr, *blockSlotsD = nullptr, *nodeDimsD = nullptr;
+   double *nodeTransformsD = nullptr;
    double *elemParamsD = nullptr, *elemNodePositionsD = nullptr;
    double *naturalGradsD = nullptr, *ipWeightsD = nullptr;
 
    const size_t elemBytes = (size_t)nelems * sizeof(int);
    const size_t elemOffBytes = (size_t)(nelems + 1) * sizeof(int);
    const size_t nodeBytes = (size_t)nnodes * 3 * sizeof(double);
+   const size_t nodeDimBytes = (size_t)nnodes * sizeof(int);
+   const size_t nodeXformBytes = (size_t)nnodes * 18 * sizeof(double);
    const size_t pairIdxBytes = (size_t)npairs * 2 * sizeof(int);
-   const size_t slotBytes = (size_t)npairs * 9 * sizeof(int);
+   const size_t slotBytes = (size_t)npairs * 36 * sizeof(int);
    const size_t paramBytes = (size_t)nelems * 2 * sizeof(double);
    const size_t gradBytes = (size_t)ngrads * 3 * sizeof(double);
    const size_t weightBytes = (size_t)nips * sizeof(double);
@@ -1033,6 +1038,8 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
        !cudaOk (cudaMalloc (&elemNaturalGradOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&pairNodeIdxsD, pairIdxBytes)) ||
        !cudaOk (cudaMalloc (&blockSlotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&nodeDimsD, nodeDimBytes)) ||
+       !cudaOk (cudaMalloc (&nodeTransformsD, nodeXformBytes)) ||
        !cudaOk (cudaMalloc (&elemParamsD, paramBytes)) ||
        !cudaOk (cudaMalloc (&elemNodePositionsD, nodeBytes)) ||
        !cudaOk (cudaMalloc (&naturalGradsD, gradBytes)) ||
@@ -1044,6 +1051,8 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
       if (elemNaturalGradOffsetsD) cudaFree (elemNaturalGradOffsetsD);
       if (pairNodeIdxsD) cudaFree (pairNodeIdxsD);
       if (blockSlotsD) cudaFree (blockSlotsD);
+      if (nodeDimsD) cudaFree (nodeDimsD);
+      if (nodeTransformsD) cudaFree (nodeTransformsD);
       if (elemParamsD) cudaFree (elemParamsD);
       if (elemNodePositionsD) cudaFree (elemNodePositionsD);
       if (naturalGradsD) cudaFree (naturalGradsD);
@@ -1075,6 +1084,12 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
           blockSlotsD, blockSlots, slotBytes,
           cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
+          nodeDimsD, nodeDims, nodeDimBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          nodeTransformsD, nodeTransforms, nodeXformBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
           elemParamsD, elemParams, paramBytes,
           cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
@@ -1093,6 +1108,8 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
       cudaFree (elemNaturalGradOffsetsD);
       cudaFree (pairNodeIdxsD);
       cudaFree (blockSlotsD);
+      cudaFree (nodeDimsD);
+      cudaFree (nodeTransformsD);
       cudaFree (elemParamsD);
       cudaFree (elemNodePositionsD);
       cudaFree (naturalGradsD);
@@ -1104,6 +1121,7 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
    addLinearElasticStiffness3ElementGeometry_launch (
       nelems, elemNodeCountsD, elemNodeOffsetsD, elemPairOffsetsD,
       elemIpOffsetsD, elemNaturalGradOffsetsD, pairNodeIdxsD, blockSlotsD,
+      nodeDimsD, nodeTransformsD,
       elemParamsD, elemNodePositionsD, naturalGradsD, ipWeightsD, scale,
       myValsD, myStream);
    cudaError_t launchErr = cudaGetLastError();
@@ -1114,6 +1132,8 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
    cudaFree (elemNaturalGradOffsetsD);
    cudaFree (pairNodeIdxsD);
    cudaFree (blockSlotsD);
+   cudaFree (nodeDimsD);
+   cudaFree (nodeTransformsD);
    cudaFree (elemParamsD);
    cudaFree (elemNodePositionsD);
    cudaFree (naturalGradsD);

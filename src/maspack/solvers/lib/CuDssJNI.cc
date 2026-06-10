@@ -368,7 +368,8 @@ Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffness3ElementGeometryDevi
    jintArray elemNodeCounts, jintArray elemNodeOffsets,
    jintArray elemPairOffsets, jintArray elemIpOffsets,
    jintArray elemNaturalGradOffsets, jintArray pairNodeIdxs,
-   jintArray blockSlots, jdoubleArray elemParams,
+   jintArray blockSlots, jintArray nodeDims, jdoubleArray nodeTransforms,
+   jdoubleArray elemParams,
    jdoubleArray elemNodePositions, jdoubleArray naturalGrads,
    jdoubleArray ipWeights, jint nelems, jdouble scale) {
    CuDssBridge* b = asBridge (handle);
@@ -385,6 +386,9 @@ Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffness3ElementGeometryDevi
       env->GetIntArrayElements (elemNaturalGradOffsets, nullptr);
    jint* pairNodeIdxsP = env->GetIntArrayElements (pairNodeIdxs, nullptr);
    jint* blockSlotsP = env->GetIntArrayElements (blockSlots, nullptr);
+   jint* nodeDimsP = env->GetIntArrayElements (nodeDims, nullptr);
+   jdouble* nodeTransformsP =
+      env->GetDoubleArrayElements (nodeTransforms, nullptr);
    jdouble* elemParamsP =
       env->GetDoubleArrayElements (elemParams, nullptr);
    jdouble* elemNodePositionsP =
@@ -395,7 +399,8 @@ Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffness3ElementGeometryDevi
       env->GetDoubleArrayElements (ipWeights, nullptr);
    if (!elemNodeCountsP || !elemNodeOffsetsP || !elemPairOffsetsP ||
        !elemIpOffsetsP || !elemNaturalGradOffsetsP || !pairNodeIdxsP ||
-       !blockSlotsP || !elemParamsP || !elemNodePositionsP ||
+       !blockSlotsP || !nodeDimsP || !nodeTransformsP ||
+       !elemParamsP || !elemNodePositionsP ||
        !naturalGradsP || !ipWeightsP) {
       if (elemNodeCountsP) {
          env->ReleaseIntArrayElements (
@@ -424,6 +429,13 @@ Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffness3ElementGeometryDevi
       if (blockSlotsP) {
          env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
       }
+      if (nodeDimsP) {
+         env->ReleaseIntArrayElements (nodeDims, nodeDimsP, JNI_ABORT);
+      }
+      if (nodeTransformsP) {
+         env->ReleaseDoubleArrayElements (
+            nodeTransforms, nodeTransformsP, JNI_ABORT);
+      }
       if (elemParamsP) {
          env->ReleaseDoubleArrayElements (
             elemParams, elemParamsP, JNI_ABORT);
@@ -446,7 +458,8 @@ Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffness3ElementGeometryDevi
       (const int*)elemNodeCountsP, (const int*)elemNodeOffsetsP,
       (const int*)elemPairOffsetsP, (const int*)elemIpOffsetsP,
       (const int*)elemNaturalGradOffsetsP, (const int*)pairNodeIdxsP,
-      (const int*)blockSlotsP, (const double*)elemParamsP,
+      (const int*)blockSlotsP, (const int*)nodeDimsP,
+      (const double*)nodeTransformsP, (const double*)elemParamsP,
       (const double*)elemNodePositionsP, (const double*)naturalGradsP,
       (const double*)ipWeightsP, (int)nelems, (double)scale);
    env->ReleaseIntArrayElements (
@@ -461,6 +474,9 @@ Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffness3ElementGeometryDevi
       elemNaturalGradOffsets, elemNaturalGradOffsetsP, JNI_ABORT);
    env->ReleaseIntArrayElements (pairNodeIdxs, pairNodeIdxsP, JNI_ABORT);
    env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (nodeDims, nodeDimsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (
+      nodeTransforms, nodeTransformsP, JNI_ABORT);
    env->ReleaseDoubleArrayElements (elemParams, elemParamsP, JNI_ABORT);
    env->ReleaseDoubleArrayElements (
       elemNodePositions, elemNodePositionsP, JNI_ABORT);

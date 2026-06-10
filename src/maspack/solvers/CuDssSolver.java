@@ -117,6 +117,7 @@ public class CuDssSolver implements DirectSolver {
       long handle, int[] elemNodeCounts, int[] elemNodeOffsets,
       int[] elemPairOffsets, int[] elemIpOffsets,
       int[] elemNaturalGradOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      int[] nodeDims, double[] nodeTransforms,
       double[] elemParams, double[] elemNodePositions,
       double[] naturalGrads, double[] ipWeights, int nelems, double scale);
    private static native int    doAddDilationalStiffness3ElementDeviceValues (
@@ -666,7 +667,8 @@ public class CuDssSolver implements DirectSolver {
    public synchronized void addLinearElasticStiffness3ElementGeometryDeviceValues (
       int[] elemNodeCounts, int[] elemNodeOffsets, int[] elemPairOffsets,
       int[] elemIpOffsets, int[] elemNaturalGradOffsets, int[] pairNodeIdxs,
-      int[] blockSlots, double[] elemParams, double[] elemNodePositions,
+      int[] blockSlots, int[] nodeDims, double[] nodeTransforms,
+      double[] elemParams, double[] elemNodePositions,
       double[] naturalGrads, double[] ipWeights, int nelems, double scale) {
       if (myState == UNSET) {
          throw new ImproperStateException ("analyze() not previously called");
@@ -686,7 +688,9 @@ public class CuDssSolver implements DirectSolver {
       int ngrads = elemNaturalGradOffsets[nelems];
       if (nnodes < 0 || npairs < 0 || nips < 0 || ngrads < 0 ||
           npairs > pairNodeIdxs.length/2 ||
-          npairs > blockSlots.length/9 ||
+          npairs > blockSlots.length/36 ||
+          nnodes > nodeDims.length ||
+          nnodes > nodeTransforms.length/18 ||
           nelems > elemParams.length/2 ||
           nnodes > elemNodePositions.length/3 ||
           ngrads > naturalGrads.length/3 ||
@@ -698,6 +702,7 @@ public class CuDssSolver implements DirectSolver {
          doAddLinearElasticStiffness3ElementGeometryDeviceValues (
             myHandle, elemNodeCounts, elemNodeOffsets, elemPairOffsets,
             elemIpOffsets, elemNaturalGradOffsets, pairNodeIdxs, blockSlots,
+            nodeDims, nodeTransforms,
             elemParams, elemNodePositions, naturalGrads, ipWeights, nelems,
             scale),
          "addLinearElasticStiffness3ElementGeometryDeviceValues");

@@ -252,10 +252,9 @@ extern "C" void addMaterialStiffness3_launch (
       nblocks, blockSlots, gis, gjs, Ds, sigmas, dvs, globalScale, crsVals);
 }
 
-__device__ static void addMaterialStiffness3Block (
-   const int* slots, const double* gi, const double* D,
-   const double* sig, const double* gjRaw, double dv, double globalScale,
-   double* crsVals) {
+__device__ static void computeMaterialStiffness3K (
+   const double* gi, const double* D,
+   const double* sig, const double* gjRaw, double dv, double K[9]) {
 
    double gix = gi[0];
    double giy = gi[1];
@@ -288,7 +287,6 @@ __device__ static void addMaterialStiffness3Block (
    double dm51 = D[31]*gjy + D[33]*gjx + D[34]*gjz;
    double dm52 = D[32]*gjz + D[34]*gjy + D[35]*gjx;
 
-   double K[9];
    K[0] = gix*dm00 + giy*dm30 + giz*dm50;
    K[1] = gix*dm01 + giy*dm31 + giz*dm51;
    K[2] = gix*dm02 + giy*dm32 + giz*dm52;
@@ -306,11 +304,64 @@ __device__ static void addMaterialStiffness3Block (
    K[0] += Kg;
    K[4] += Kg;
    K[8] += Kg;
+}
 
+// Scatters a fully-formed 3x3 stiffness block K to its 9 CRS slots.
+__device__ static void addMaterialStiffness3Block (
+   const int* slots, const double* gi, const double* D,
+   const double* sig, const double* gjRaw, double dv, double globalScale,
+   double* crsVals) {
+
+   double K[9];
+   computeMaterialStiffness3K (gi, D, sig, gjRaw, dv, K);
    for (int j = 0; j < 9; j++) {
       int slot = slots[j];
       if (slot >= 0) {
          atomicAdd (&crsVals[slot], globalScale * K[j]);
+      }
+   }
+}
+
+// Master-slave reduction at element-scatter time. For node pair (i,j) the
+// 3x3 stiffness K_ij is transformed to T_i K_ij T_j^T and scattered to the
+// (target_i, target_j) block, where T = I (3x3) for a free node and T = H
+// (6x3, the PointFrameAttachment master block) for a slave node. This is
+// exactly P^T K P assembled directly: pure atomicAdd, no zeroing, no ordering
+// dependence, correct for any number of slaves coupled to the same master.
+//   TL  = T_i, stored row-major as (rowDim x 3) within an 18-double slot.
+//   TJ  = T_j, stored the same way; the right factor is T_j^T, so we read TJ
+//         transposed (TR[k][c] = TJ[c][k]).
+//   slots = target block CRS slots, row-major (rowDim x colDim), up to 36.
+__device__ static void addReducedMaterialStiffness3Block (
+   const int* slots, int rowDim, int colDim,
+   const double* TL, const double* TJ,
+   const double* gi, const double* D, const double* sig,
+   const double* gjRaw, double dv, double globalScale, double* crsVals) {
+
+   double K[9];
+   computeMaterialStiffness3K (gi, D, sig, gjRaw, dv, K);
+   // tmp = TL * K  -> (rowDim x 3)
+   double tmp[18];
+   for (int r = 0; r < rowDim; r++) {
+      for (int c = 0; c < 3; c++) {
+         double s = 0.0;
+         for (int k = 0; k < 3; k++) {
+            s += TL[r*3 + k] * K[k*3 + c];
+         }
+         tmp[r*3 + c] = s;
+      }
+   }
+   // result = tmp * T_j^T  -> (rowDim x colDim); TR[k][c] = TJ[c*3 + k]
+   for (int r = 0; r < rowDim; r++) {
+      for (int c = 0; c < colDim; c++) {
+         double s = 0.0;
+         for (int k = 0; k < 3; k++) {
+            s += tmp[r*3 + k] * TJ[c*3 + k];
+         }
+         int slot = slots[r*colDim + c];
+         if (slot >= 0) {
+            atomicAdd (&crsVals[slot], globalScale * s);
+         }
       }
    }
 }
@@ -492,6 +543,8 @@ __global__ static void addLinearElasticStiffness3ElementGeometryKernel (
    const int*    __restrict__ elemNaturalGradOffsets,
    const int*    __restrict__ pairNodeIdxs,
    const int*    __restrict__ blockSlots,
+   const int*    __restrict__ nodeDims,
+   const double* __restrict__ nodeTransforms,
    const double* __restrict__ elemParams,
    const double* __restrict__ elemNodePositions,
    const double* __restrict__ naturalGrads,
@@ -543,8 +596,18 @@ __global__ static void addLinearElasticStiffness3ElementGeometryKernel (
       computeSpatialGradient (invJ, naturalGrads + 3*(ngBase + i), gi);
       computeSpatialGradient (invJ, naturalGrads + 3*(ngBase + j), gj);
       double dv = detJ * ipWeights[ipidx];
-      addMaterialStiffness3Block (
-         blockSlots + 9*pidx, gi, D, sig, gj, dv, globalScale, crsVals);
+      // Master-slave reduction at scatter time: redirect the (i,j) 3x3 block
+      // onto the target (reduced) block via T_i K T_j^T. nodeDims/nodeTransforms
+      // give the per-node target dimension (3 free / 6 slave) and transform
+      // (I3 free / H 6x3 slave); blockSlots holds the target block CRS slots
+      // row-major (rowDim x colDim), 36-stride. Free-free reduces to the plain
+      // 9-slot scatter with identity transforms.
+      int rowDim = nodeDims[node0 + i];
+      int colDim = nodeDims[node0 + j];
+      addReducedMaterialStiffness3Block (
+         blockSlots + 36*pidx, rowDim, colDim,
+         nodeTransforms + 18*(node0 + i), nodeTransforms + 18*(node0 + j),
+         gi, D, sig, gj, dv, globalScale, crsVals);
    }
 }
 
@@ -553,15 +616,17 @@ extern "C" void addLinearElasticStiffness3ElementGeometry_launch (
    const int* elemNodeCounts, const int* elemNodeOffsets,
    const int* elemPairOffsets, const int* elemIpOffsets,
    const int* elemNaturalGradOffsets, const int* pairNodeIdxs,
-   const int* blockSlots, const double* elemParams,
+   const int* blockSlots, const int* nodeDims, const double* nodeTransforms,
+   const double* elemParams,
    const double* elemNodePositions, const double* naturalGrads,
    const double* ipWeights, double globalScale, double* crsVals,
    cudaStream_t stream) {
    const int threads = 256;
    addLinearElasticStiffness3ElementGeometryKernel<<<nelems, threads, 0, stream>>>(
       nelems, elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
-      elemNaturalGradOffsets, pairNodeIdxs, blockSlots, elemParams,
-      elemNodePositions, naturalGrads, ipWeights, globalScale, crsVals);
+      elemNaturalGradOffsets, pairNodeIdxs, blockSlots, nodeDims, nodeTransforms,
+      elemParams, elemNodePositions, naturalGrads, ipWeights, globalScale,
+      crsVals);
 }
 
 __global__ static void addDilationalStiffness3ElementKernel (

@@ -43,6 +43,7 @@ import artisynth.core.mechmodels.MeshComponentList;
 import artisynth.core.mechmodels.Point;
 import artisynth.core.mechmodels.PointAttachable;
 import artisynth.core.mechmodels.PointAttachment;
+import artisynth.core.mechmodels.PointFrameAttachment;
 import artisynth.core.mechmodels.PointList;
 import artisynth.core.mechmodels.PointParticleAttachment;
 import artisynth.core.modelbase.ComponentChangeEvent;
@@ -4213,6 +4214,17 @@ PointAttachable, ConnectableBody {
          }
          return false;
       }
+      if (hasActiveMasterAttachedNode()) {
+         // the nonlinear material3 kernel does not perform the master-slave
+         // reduction; only the linear-elastic geometry kernel does.
+         if (profileGpuAssembly) {
+            System.out.printf (
+               "[gpu-assembly-profile] fem=%s material3 disabled: "+
+               "active-master attachment (reduction is linear-elastic only)%n",
+               profileName());
+         }
+         return false;
+      }
       for (FemElement3d e : myElements) {
          FemMaterial mat = getElementMaterial(e);
          if (!materialSupportsGpuMaterialStiffness3 (mat) ||
@@ -4290,6 +4302,62 @@ PointAttachable, ConnectableBody {
       return true;
    }
 
+   // True if any node is the slave of a PointFrameAttachment whose master frame
+   // is active. The master-slave stiffness reduction is implemented ONLY in the
+   // linear-elastic geometry kernel; the nonlinear material3 / dilational
+   // kernels do not redirect, so they must stay disabled for such models (they
+   // fall back to host assembly), while the linear-elastic geometry path
+   // proceeds with the device reduction.
+   private boolean hasActiveMasterAttachedNode() {
+      for (int i=0; i<myNodes.size(); i++) {
+         DynamicAttachment att = myNodes.get(i).getAttachment();
+         if (att instanceof PointFrameAttachment) {
+            Frame frame = ((PointFrameAttachment)att).getFrame();
+            if (frame != null && frame.isActive()) {
+               return true;
+            }
+         }
+      }
+      return false;
+   }
+
+   // Fills the per-node master-slave reduction descriptor used by the GPU
+   // geometry kernel (addReducedMaterialStiffness3Block). For a free node the
+   // target is the node's own solve block and T = I (3x3); for a
+   // PointFrameAttachment slave on an ACTIVE frame the target is the frame's
+   // solve block and T = H (6x3, the attachment master block H = -getGT(0)).
+   // T is written row-major into the 6x3 (18-double) slot at toff. Returns the
+   // target block dimension (3 free / 6 slave); targetIdx[0] receives the
+   // target solve index.
+   private int getGpuNodeReduction (
+      FemNode3d node, double[] T, int toff, int[] targetIdx) {
+
+      for (int k=0; k<18; k++) {
+         T[toff+k] = 0;
+      }
+      DynamicAttachment att = node.getAttachment();
+      if (att instanceof PointFrameAttachment) {
+         PointFrameAttachment pfa = (PointFrameAttachment)att;
+         Frame frame = pfa.getFrame();
+         if (frame != null && frame.isActive() &&
+             frame.getSolveIndex() != -1) {
+            MatrixBlock gt = pfa.getGT(0);   // gt = -H (6x3)
+            for (int r=0; r<6; r++) {
+               for (int c=0; c<3; c++) {
+                  T[toff + r*3 + c] = -gt.get(r,c);   // H = -gt
+               }
+            }
+            targetIdx[0] = frame.getSolveIndex();
+            return 6;
+         }
+      }
+      T[toff + 0] = 1;
+      T[toff + 4] = 1;
+      T[toff + 8] = 1;
+      targetIdx[0] = node.getSolveIndex();
+      return 3;
+   }
+
    private boolean addLinearElasticStiffness3CrsValueContributions (
       MechSystem.GpuAssemblyContext context, double s) {
 
@@ -4328,7 +4396,12 @@ PointAttachable, ConnectableBody {
       int[] elemIpOffsets = new int[nelems+1];
       int[] elemNaturalGradOffsets = new int[nelems+1];
       int[] pairNodeIdxs = new int[2*totalPairs];
-      int[] blockSlots = new int[9*totalPairs];
+      // 36-slot stride per pair (row-major rowDim x colDim of the target,
+      // reduced block; max 6x6). Unwritten entries stay -1.
+      int[] blockSlots = new int[36*totalPairs];
+      java.util.Arrays.fill (blockSlots, -1);
+      int[] nodeDims = new int[totalElemNodes];
+      double[] nodeTransforms = new double[18*totalElemNodes];
       double[] elemParams = new double[2*nelems];
       double[] elemNodePositions = new double[3*totalElemNodes];
       double[] naturalGrads = new double[3*totalGradVecs];
@@ -4339,6 +4412,9 @@ PointAttachable, ConnectableBody {
       int pairIdx = 0;
       int ipIdx = 0;
       int gradVecIdx = 0;
+      // solve matrix: target (reduced) block numbers are looked up here by
+      // (solveRow, solveCol); the master-coupling blocks pre-exist in S.
+      SparseNumberedBlockMatrix S = context.getMatrix();
       for (FemElement3d e : myElements) {
          LinearMaterial mat = (LinearMaterial)getElementMaterial(e);
          elemNodeCounts[elemIdx] = e.myNodes.length;
@@ -4349,49 +4425,67 @@ PointAttachable, ConnectableBody {
          elemParams[2*elemIdx] = mat.getYoungsModulus();
          elemParams[2*elemIdx+1] = mat.getPoissonsRatio();
 
-         for (int i=0; i<e.myNodes.length; i++) {
+         int nn = e.myNodes.length;
+         int[] tdim = new int[nn];   // target block dim per local node (3/6)
+         int[] tgt = new int[nn];    // target solve index per local node
+         int[] tmpTarget = new int[1];
+         for (int i=0; i<nn; i++) {
+            FemNode3d nd = e.myNodes[i];
             // non-corotated linear stiffness is evaluated at the REST
             // configuration (it is constant); the geometry kernel must build
             // its spatial gradients from rest positions, not the current
             // (deformed) ones, or the stiffness drifts as the mesh deforms.
-            Vector3d pos = e.myNodes[i].getRestPosition();
-            int posBase = 3*elemNodeIdx++;
+            Vector3d pos = nd.getRestPosition();
+            int posBase = 3*elemNodeIdx;
             elemNodePositions[posBase++] = pos.x;
             elemNodePositions[posBase++] = pos.y;
             elemNodePositions[posBase++] = pos.z;
+            // per-node master-slave reduction descriptor (free / slave)
+            tdim[i] = getGpuNodeReduction (
+               nd, nodeTransforms, 18*elemNodeIdx, tmpTarget);
+            tgt[i] = tmpTarget[0];
+            nodeDims[elemNodeIdx] = tdim[i];
+            elemNodeIdx++;
          }
 
-         for (int i = 0; i < e.myNodes.length; i++) {
+         for (int i = 0; i < nn; i++) {
             int bi = e.myNodes[i].getLocalSolveIndex();
             if (bi != -1) {
-               for (int j = 0; j < e.myNodes.length; j++) {
+               for (int j = 0; j < nn; j++) {
                   int bj = e.myNodes[j].getLocalSolveIndex();
                   // emit every node pair: the device matrix is factored as
                   // GENERAL (full), so the lower block triangle must be filled
                   if (bj != -1) {
-                     FemNodeNeighbor nbr = e.myNbrs[i][j];
                      pairNodeIdxs[2*pairIdx] = i;
                      pairNodeIdxs[2*pairIdx+1] = j;
-                     int slotBase = 9*pairIdx;
-                     int blkNum = nbr.getBlockNumber();
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 0);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 1);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 2);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 0);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 1);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 2);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 0);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 1);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 2);
+                     // reduction at scatter time: the 3x3 K_ij is redirected to
+                     // the (target_i, target_j) block as T_i K T_j^T. For a free
+                     // pair target_i/j are the nodes' own solve blocks (dim 3,
+                     // T=I), so this reproduces the plain 9-slot scatter; for a
+                     // slave the target is the master frame's block (dim 6, T=H).
+                     int rowDim = tdim[i];
+                     int colDim = tdim[j];
+                     MatrixBlock tb = S.getBlock (tgt[i], tgt[j]);
+                     if (tb == null) {
+                        // master-coupling block absent: cannot assemble the
+                        // reduction on the existing pattern -> CPU fallback.
+                        if (MechSystemSolver.getGpuAssemblyProfilingEnabled()) {
+                           System.out.printf (
+                              "[gpu-assembly-profile] fem=%s linearElem3 "+
+                              "disabled: missing target block (%d,%d)%n",
+                              profileName(), tgt[i], tgt[j]);
+                        }
+                        return false;
+                     }
+                     int blkNum = tb.getBlockNumber();
+                     int slotBase = 36*pairIdx;
+                     for (int r=0; r<rowDim; r++) {
+                        for (int c=0; c<colDim; c++) {
+                           blockSlots[slotBase + r*colDim + c] =
+                              context.getSlotMap().getBlockValueSlot (
+                                 blkNum, r, c);
+                        }
+                     }
                      pairIdx++;
                   }
                }
@@ -4419,7 +4513,8 @@ PointAttachable, ConnectableBody {
       elemNaturalGradOffsets[nelems] = gradVecIdx;
       context.addLinearElasticStiffness3ElementGeometryCrsValueContributions (
          elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
-         elemNaturalGradOffsets, pairNodeIdxs, blockSlots, elemParams,
+         elemNaturalGradOffsets, pairNodeIdxs, blockSlots, nodeDims,
+         nodeTransforms, elemParams,
          elemNodePositions, naturalGrads, ipWeights, nelems);
       return true;
    }
