@@ -1109,6 +1109,75 @@ public class FemModel3dTest extends UnitTest {
          "constrained (KKT) cuDSS equivalence ok: max="+max+" (ref="+ref+")");
    }
 
+   // Steps a non-corotated linear FEM beam whose free-end nodes are attached to
+   // an ACTIVE (dynamic) rigid body, under ConstrainedBackwardEuler (KKT). This
+   // is the FemBeamWithActiveBody scenario: the master-slave reduction (G^T K G
+   // onto the active body DOFs) is performed on the GPU at element-scatter time
+   // (addReducedMaterialStiffness3Block), redirecting each slave node's
+   // stiffness onto the master frame block. Must match Pardiso.
+   private double[] runActiveBodyAttachmentStep (
+      maspack.solvers.SparseSolverId solverId) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel();
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      RigidBody body = RigidBody.createBox ("body", 0.2, 0.5, 0.5, 1000);
+      body.setPose (new RigidTransform3d (0.6, 0, 0));
+      body.setFrameDamping (5.0);
+      body.setRotaryDamping (1.0);
+      mech.addRigidBody (body);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x >= 0.5 - 1e-6) {
+            mech.attachPoint (node, body);
+         }
+      }
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testBackwardEulerActiveBodyAttachmentEquivalence() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;   // cuDSS not present; nothing GPU-specific to check
+      }
+      double[] gpu =
+         runActiveBodyAttachmentStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu =
+         runActiveBodyAttachmentStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "active-body attachment cuDSS vs Pardiso velocity mismatch: "+
+            "max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "active-body attachment cuDSS equivalence ok: max="+max+
+         " (ref="+ref+")");
+   }
+
    void checkNumbering (FemModel3d fem, boolean zeroBased) {
       int inc = zeroBased ? 0 : 1;
       for (int i=0; i< fem.numNodes(); i++) {
@@ -1182,6 +1251,7 @@ public class FemModel3dTest extends UnitTest {
       testBackwardEulerFixedAttachmentEquivalence();
       testBackwardEulerSpringEquivalence();
       testBackwardEulerFreeBodyEquivalence();
+      testBackwardEulerActiveBodyAttachmentEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();
       testSetNumbering();

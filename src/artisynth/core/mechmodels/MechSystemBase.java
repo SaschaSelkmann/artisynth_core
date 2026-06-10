@@ -2432,6 +2432,27 @@ public abstract class MechSystemBase extends RenderableModelBase
       return false;
    }
 
+   // True if any attachment has an active master. Such an attachment injects a
+   // velocity-dependent fictitious force onto the active master DOFs (the
+   // f += M*dg term in DynamicAttachmentWorker.addAttachmentJacobian, via
+   // getNegatedDerivative). The device KKT velocity-Jacobian RHS path computes
+   // only J*vel0 and omits this force, so it must NOT be used for such systems;
+   // the host RHS path (addVelJacobian into S + reduction) computes it. The GPU
+   // M-block FACTOR is unaffected and still runs on the device.
+   public boolean hasActiveAttachmentJacobianForces() {
+      if (myAttachments == null) {
+         return false;
+      }
+      for (int i=0; i<myAttachments.size(); i++) {
+         for (DynamicComponent m : myAttachments.get(i).getMasters()) {
+            if (m.isActive()) {
+               return true;
+            }
+         }
+      }
+      return false;
+   }
+
    // True for an active-master attachment whose stiffness reduction the GPU
    // linear-elastic geometry kernel handles (addReducedMaterialStiffness3Block):
    // a PointFrameAttachment with a FemNode3d slave and an active Frame master.

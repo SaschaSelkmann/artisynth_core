@@ -2765,9 +2765,18 @@ public class MechSystemSolver {
          // is parametric but has zero velocity, so it stays eligible.
          boolean parametricVelZero =
             (myParametricVelSize == 0 || myUpar.infinityNorm() == 0);
+         // An active-master attachment injects a velocity-dependent fictitious
+         // force onto the active masters (addAttachmentJacobian's f += M*dg
+         // term, via getNegatedDerivative). The device RHS path forms only
+         // J*vel0 and omits it, so it must fall back to the host RHS here. The
+         // GPU M-block FACTOR is unaffected and still runs on the device.
+         boolean activeAttachmentForces =
+            (mySys instanceof MechSystemBase) &&
+            ((MechSystemBase)mySys).hasActiveAttachmentJacobianForces();
          boolean deviceVelJacRhs = false;
          if (!analyze && vel0 != null && useFictitousJacobianForces &&
-             parametricVelZero && enableGpuAssembly() &&
+             parametricVelZero && !activeAttachmentForces &&
+             enableGpuAssembly() &&
              myKKTSolver != null &&
              myKKTSolver.canFactorDeviceMContributions()) {
             deviceVelJacRhs =
