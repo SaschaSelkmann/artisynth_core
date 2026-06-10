@@ -449,6 +449,66 @@ public class DynamicAttachmentWorker {
          }
       }
       return false;
-   }   
+   }
+
+   // --- GPU transitive attachment reduction --------------------------------
+   //
+   // The GPU master-slave reduction scatters sum_{a,b} G_a B G_b^T onto the
+   // reduced master blocks, where each (target,G) pair maps a slave's DOFs onto
+   // an ultimately ACTIVE master DOF block. When a slave's direct master is
+   // itself an attached (non-active) component -- e.g. a FemMarker whose FEM
+   // nodes are in turn attached to an active rigid body -- the reduction must
+   // follow the attachment chain TRANSITIVELY to the active masters, composing
+   // the per-level G transforms (G_total = G_levelN ... G_level1). A single
+   // attachment level reproduces the previous behaviour exactly (the loop runs
+   // once with G = -getGT(idx)). Inactive, unattached masters (fixed boundary
+   // components) carry no active DOF and are dropped, matching the host
+   // addAttachmentJacobian which skips masters with getSolveIndex() == -1.
+
+   /**
+    * Returns true if the attachment chain rooted at {@code c} terminates at an
+    * active master DOF, so a GPU reduction can route its contributions there.
+    */
+   public static boolean chainHasActiveMaster (DynamicComponent c) {
+      DynamicAttachment at = c.getAttachment();
+      if (at == null) {
+         return false;
+      }
+      for (DynamicComponent m : at.getMasters()) {
+         if (m.isActive() || chainHasActiveMaster (m)) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   /**
+    * Flattens the attachment chain rooted at {@code c} into a list of
+    * (targetSolveIndex, G) pairs onto its ultimate ACTIVE masters. {@code Gin}
+    * maps the original slave's DOFs onto {@code c}'s DOFs (start with the
+    * identity sized to the slave's DOFs); each appended {@code G} then maps the
+    * slave's DOFs onto the target master's DOF block.
+    */
+   public static void collectReducedMasters (
+      DynamicComponent c, MatrixNd Gin,
+      List<Integer> targets, List<MatrixNd> Gs) {
+      if (c.isActive()) {
+         targets.add (c.getSolveIndex());
+         Gs.add (new MatrixNd (Gin));
+         return;
+      }
+      DynamicAttachment at = c.getAttachment();
+      if (at == null) {
+         return; // inactive and unattached (fixed): no active DOF, drop
+      }
+      DynamicComponent[] masters = at.getMasters();
+      for (int idx=0; idx<masters.length; idx++) {
+         MatrixNd g = new MatrixNd (at.getGT (idx)); // -G (masterDOF x cDOF)
+         g.negate();
+         MatrixNd Gnext = new MatrixNd();
+         Gnext.mul (g, Gin); // (masterDOF x cDOF)(cDOF x slaveDOF)
+         collectReducedMasters (masters[idx], Gnext, targets, Gs);
+      }
+   }
 
 }

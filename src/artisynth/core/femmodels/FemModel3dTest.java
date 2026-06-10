@@ -732,21 +732,25 @@ public class FemModel3dTest extends UnitTest {
             + context.numLinearElasticStiffness3ElementGeometryContributions();
       if (expectContributions && n == 0) {
          throw new TestException (
-            "non-corotated LinearMaterial produced no linear-elastic GPU "+
-            "stiffness contributions; kernel path not routed");
+            (corotated ? "corotated" : "non-corotated")+" LinearMaterial "+
+            "produced no linear-elastic GPU stiffness contributions; kernel "+
+            "path not routed");
       }
       if (!expectContributions && n != 0) {
          throw new TestException (
-            "corotated LinearMaterial produced "+n+" linear-elastic GPU "+
-            "stiffness contributions; gate failed (expected 0)");
+            "LinearMaterial produced "+n+" linear-elastic GPU stiffness "+
+            "contributions; gate failed (expected 0)");
       }
    }
 
    private void testLinearElasticStiffness3Routing() {
+      // BOTH non-corotated and corotated linear now route to the geometry kernel
+      // (corotated folds the per-element warping rotation into the node
+      // transforms; see FemModel3d.warpNodeTransform).
       assertLinearElasticContributions (
          /*corotated=*/false, /*expectContributions=*/true);
       assertLinearElasticContributions (
-         /*corotated=*/true, /*expectContributions=*/false);
+         /*corotated=*/true, /*expectContributions=*/true);
    }
 
    // Behavioral GPU-vs-CPU equivalence for the linear-elastic kernels: steps a
@@ -785,6 +789,82 @@ public class FemModel3dTest extends UnitTest {
       VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
       mech.getActiveVelState (vel);
       return vel.getBuffer().clone();
+   }
+
+   // GPU-vs-CPU equivalence for COROTATED linear material under LARGE rotation.
+   // A soft cantilever (x-min fixed) sags far under gravity, so the tip elements
+   // undergo large rigid-body rotation -- exactly where corotated and non-
+   // corotated diverge (non-corotated would lock against the rotation). The GPU
+   // geometry kernel folds the per-element warping rotation R into the node
+   // transforms (T -> T*R); this must match Pardiso. Returns the tip-node z (a
+   // large-rotation witness) appended to the velocity state so a failure to bend
+   // is also caught.
+   private double[] runCorotatedBeamStep (
+      maspack.solvers.SparseSolverId solverId) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.2, 0.2, 8, 2, 2);
+      LinearMaterial mat = new LinearMaterial (20000, 0.33, /*corotated=*/true);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.05);
+      fem.setParticleDamping (0.1);
+      FemNode3d tip = null;
+      double xMax = Double.NEGATIVE_INFINITY;
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+         if (node.getRestPosition().x > xMax) {
+            xMax = node.getRestPosition().x;
+            tip = node;
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      double h = 0.01;
+      for (int i=0; i<25; i++) {   // long enough for a large tip rotation/sag
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      double[] out = new double[vel.size()+1];
+      System.arraycopy (vel.getBuffer(), 0, out, 0, vel.size());
+      out[vel.size()] = tip.getPosition().z;   // large-rotation witness
+      return out;
+   }
+
+   private void testCorotatedLinearEquivalence() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu = runCorotatedBeamStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu =
+         runCorotatedBeamStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      // sanity: the beam must actually bend a lot (else the test is vacuous and
+      // corotation is untested). tip z (last entry) should drop well below rest.
+      double tipZ = cpu[cpu.length-1];
+      if (tipZ > -0.05) {
+         throw new TestException (
+            "corotated beam did not bend (tip z="+tipZ+"); test is vacuous");
+      }
+      if (max > tol) {
+         throw new TestException (
+            "corotated linear cuDSS vs Pardiso mismatch: max="+max+
+            " (tol="+tol+", ref="+ref+", tipZ="+tipZ+")");
+      }
+      System.out.println (
+         "corotated linear cuDSS equivalence ok: max="+max+
+         " (ref="+ref+", tipZ="+tipZ+")");
    }
 
    private double maxVelDiff (double[] a, double[] b) {
@@ -1306,6 +1386,102 @@ public class FemModel3dTest extends UnitTest {
          "ok: max="+max+" (ref="+ref+")");
    }
 
+   // Steps a non-corotated linear FEM beam (x-min fixed) whose free-end face
+   // nodes are attached to an ACTIVE rigid body (PointFrameAttachment). A
+   // FemMarker placed at the free-end face is the slave of a PointFem3dAttachment
+   // whose masters are those body-attached nodes -- so the marker is a TWO-LEVEL
+   // attachment chain: marker -> FEM nodes -> active body. A spring from the
+   // marker to a free active anchor particle must reduce TRANSITIVELY through
+   // both levels onto the body and anchor blocks (and the body diagonal). Guards
+   // the multi-level (transitive) GPU reduction. The same body block also carries
+   // the FEM stiffness reduced from the attached nodes (single-level).
+   private double[] runTwoLevelMarkerSpringStep (
+      maspack.solvers.SparseSolverId solverId, boolean useMultiPoint) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      // active body just past the free end, attached to the x-max face nodes;
+      // those nodes become non-active (attached), so a marker on them is a
+      // two-level chain.
+      RigidBody body = RigidBody.createBox ("body", 0.1, 0.45, 0.45, 1000);
+      body.setPose (new RigidTransform3d (0.55, 0.0, 0.0));
+      body.setDynamic (true);
+      mech.addRigidBody (body);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x >= 0.5 - 1e-6) {
+            mech.addAttachment (new PointFrameAttachment (body, node));
+         }
+      }
+
+      // marker at the free-end face: its element nodes include body-attached
+      // ones (non-active) -> reduces through to the body.
+      FemMarker mkr = new FemMarker (null, 0.5, 0.1, 0.1);
+      fem.addMarker (mkr);
+
+      // free active anchor (sprung to the marker) to exercise the cross block.
+      Particle anchor = new Particle (1.0, 0.5, 0.1, 0.8);
+      anchor.setDynamic (true);
+      mech.addParticle (anchor);
+
+      if (useMultiPoint) {
+         MultiPointSpring spr = new MultiPointSpring (500.0, 1.0, 0.2);
+         spr.addPoint (anchor);
+         spr.addPoint (mkr);
+         mech.addMultiPointSpring (spr);
+      }
+      else {
+         AxialSpring spr = new AxialSpring (500.0, 1.0, 0.2);
+         mech.attachAxialSpring (anchor, mkr, spr);
+      }
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testTwoLevelMarkerSpringEquivalence (boolean useMultiPoint) {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu = runTwoLevelMarkerSpringStep (
+         maspack.solvers.SparseSolverId.CuDss, useMultiPoint);
+      double[] cpu = runTwoLevelMarkerSpringStep (
+         maspack.solvers.SparseSolverId.Pardiso, useMultiPoint);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "Two-level marker spring (multiPoint="+useMultiPoint+") cuDSS vs "+
+            "Pardiso mismatch: max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "Two-level marker spring (multiPoint="+useMultiPoint+") cuDSS "+
+         "equivalence ok: max="+max+" (ref="+ref+")");
+   }
+
    // Steps an active rigid body carrying a FrameMarker AND a wrap cylinder
    // (attached to the body via a FrameFrameAttachment), with a MultiPointSpring
    // from a fixed anchor to the marker wrapping that cylinder, under gravity.
@@ -1382,6 +1558,150 @@ public class FemModel3dTest extends UnitTest {
       System.out.println (
          "wrap-attach (FrameFrame) cuDSS equivalence ok: max="+max+
          " (ref="+ref+")");
+   }
+
+   // Steps a non-corotated linear FEM beam whose right-end nodes are attached to
+   // an ACTIVE rigid body that is in turn connected to ground by a HingeJoint, so
+   // the whole FEM+body assembly SWINGS under gravity (real, non-rest motion).
+   // The joint body's diagonal carries FEM stiffness reduced from the attached
+   // nodes AND the joint's bilateral constraint rides the GT block. This is the
+   // joint+FEM+attachment structure of the muscle arm in a model that actually
+   // moves -- it confirms the SOLVE matches Pardiso even though the assembly-level
+   // verifyKktMDeviceCrsValues flags a benign joint-body-diagonal false-positive
+   // (the host folds joint internal terms into the M diagonal that the device
+   // routes through GT). Must match Pardiso.
+   private double[] runHingeFemStep (maspack.solvers.SparseSolverId solverId) {
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      RigidBody body = RigidBody.createBox ("body", 0.2, 0.5, 0.5, 1000);
+      body.setPose (new RigidTransform3d (0.6, 0, 0));
+      body.setDynamic (true);
+      mech.addRigidBody (body);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x >= 0.5 - 1e-6) {
+            mech.attachPoint (node, body);
+         }
+      }
+      // hinge the body to ground; rotation axis along world y (local z mapped to
+      // y) so gravity swings the FEM (which extends along -x) about it.
+      RigidTransform3d TDW = new RigidTransform3d (
+         new Vector3d (0.6, 0, 0), new AxisAngle (1, 0, 0, Math.PI/2));
+      HingeJoint hinge = new HingeJoint (body, TDW);
+      mech.addBodyConnector (hinge);
+
+      double h = 0.005;
+      for (int i=0; i<10; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testHingeFemEquivalence() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu = runHingeFemStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu = runHingeFemStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "hinge+FEM cuDSS vs Pardiso mismatch: max="+max+
+            " (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "hinge+FEM cuDSS equivalence ok: max="+max+" (ref="+ref+")");
+   }
+
+   // Steps a non-corotated linear FEM beam (x-min fixed) with an ACTIVE rigid
+   // body attached to its free-end nodes, under gravity, with nonzero MechModel
+   // INERTIAL DAMPING and a seeded initial body velocity. A RigidBody's inertial
+   // damping adds -s*d*MR (rotated effective inertia) to its 6x6 velocity
+   // Jacobian; that term must be assembled on the device too (RigidBody overrides
+   // the GPU velJac hook). Without it the device M block is wrong by the inertial
+   // damping and the cuDSS solve diverges from Pardiso once the body moves. The
+   // seeded velocity exercises the velocity-coupled term from step 1. Must match
+   // Pardiso.
+   private double[] runInertialDampingStep (
+      maspack.solvers.SparseSolverId solverId) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      LinearMaterial mat = new LinearMaterial (50000, 0.33, /*corotated=*/false);
+      mat.setCorotatedMode (maspack.properties.PropertyMode.Explicit);
+      fem.setMaterial (mat);
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setInertialDamping (2.0);   // the term that must reach the device
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      RigidBody body = RigidBody.createBox ("body", 0.2, 0.5, 0.5, 1000);
+      body.setPose (new RigidTransform3d (0.6, 0, 0));
+      body.setDynamic (true);
+      mech.addRigidBody (body);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x >= 0.5 - 1e-6) {
+            mech.attachPoint (node, body);
+         }
+      }
+      // seed a nonzero body velocity so the inertial-damping velocity Jacobian is
+      // exercised immediately (rotation about y + translation along z).
+      body.setVelocity (new Twist (0, 0, 1.0, 0, 2.0, 0));
+
+      double h = 0.005;
+      for (int i=0; i<10; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testInertialDampingEquivalence() {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu = runInertialDampingStep (maspack.solvers.SparseSolverId.CuDss);
+      double[] cpu =
+         runInertialDampingStep (maspack.solvers.SparseSolverId.Pardiso);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "inertial damping cuDSS vs Pardiso mismatch: max="+max+
+            " (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "inertial damping cuDSS equivalence ok: max="+max+" (ref="+ref+")");
    }
 
    private void testMarkerSpringEquivalence (boolean useMultiPoint) {
@@ -1576,6 +1896,11 @@ public class FemModel3dTest extends UnitTest {
       testMarkerSpringEquivalence (/*useMultiPoint=*/true);
       testFemMarkerSpringEquivalence (/*useMultiPoint=*/false);
       testFemMarkerSpringEquivalence (/*useMultiPoint=*/true);
+      testTwoLevelMarkerSpringEquivalence (/*useMultiPoint=*/false);
+      testTwoLevelMarkerSpringEquivalence (/*useMultiPoint=*/true);
+      testHingeFemEquivalence();
+      testInertialDampingEquivalence();
+      testCorotatedLinearEquivalence();
       testWrapAttachEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();

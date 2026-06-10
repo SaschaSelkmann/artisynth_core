@@ -2705,7 +2705,7 @@ PointAttachable, ConnectableBody {
    // cached across deformation steps.
    protected boolean hasConstantStiffness() {
       return canAssembleLinearElasticStiffness3CrsValueContributions (
-         getAugmentingMaterials());
+         getAugmentingMaterials()) && allElementsNonCorotatedLinear();
    }
 
    @Override
@@ -4255,10 +4255,27 @@ PointAttachable, ConnectableBody {
    }
 
    private boolean isGpuLinearElasticMaterial (FemMaterial mat) {
+      // Corotated linear IS supported by the geometry kernel: the per-element
+      // warping rotation R is folded into the node transforms (T -> T*R) so the
+      // kernel scatters T_i (R K0 R^T) T_j^T. (Caching is gated separately: see
+      // hasConstantStiffness, which excludes corotated since R changes per step.)
       return (mat instanceof LinearMaterial &&
-              !mat.isCorotated() &&
               !mat.hasState() &&
               ((LinearMaterial)mat).getYoungsModulusField() == null);
+   }
+
+   // True only for the NON-corotated subset: those have position-independent
+   // (constant) stiffness that can be cached across steps. Corotated linear is
+   // GPU-assemblable (isGpuLinearElasticMaterial) but its warped stiffness
+   // R K0 R^T changes every step, so it must NOT be cached.
+   private boolean allElementsNonCorotatedLinear() {
+      for (FemElement3d e : myElements) {
+         FemMaterial mat = getElementMaterial(e);
+         if (!(mat instanceof LinearMaterial) || mat.isCorotated()) {
+            return false;
+         }
+      }
+      return true;
    }
 
    private boolean canAssembleLinearElasticStiffness3CrsValueContributions (
@@ -4358,6 +4375,22 @@ PointAttachable, ConnectableBody {
       return 3;
    }
 
+   // Post-multiplies a node's reduction transform T (rowDim x 3, row-major in an
+   // 18-double slot at off) by the 3x3 rotation R in place: T <- T * R. Used to
+   // fold the corotated per-element warping rotation into the geometry-kernel
+   // transforms, so the kernel's T_i K0 T_j^T scatter becomes the warped
+   // T_i (R K0 R^T) T_j^T = (T_i R) K0 (T_j R)^T.
+   private static void warpNodeTransform (
+      double[] T, int off, int rowDim, RotationMatrix3d R) {
+      for (int r=0; r<rowDim; r++) {
+         int b = off + 3*r;
+         double t0 = T[b], t1 = T[b+1], t2 = T[b+2];
+         T[b]   = t0*R.m00 + t1*R.m10 + t2*R.m20;
+         T[b+1] = t0*R.m01 + t1*R.m11 + t2*R.m21;
+         T[b+2] = t0*R.m02 + t1*R.m12 + t2*R.m22;
+      }
+   }
+
    private boolean addLinearElasticStiffness3CrsValueContributions (
       MechSystem.GpuAssemblyContext context, double s) {
 
@@ -4425,6 +4458,18 @@ PointAttachable, ConnectableBody {
          elemParams[2*elemIdx] = mat.getYoungsModulus();
          elemParams[2*elemIdx+1] = mat.getPoissonsRatio();
 
+         // Corotated linear: warp the constant rest stiffness by the per-element
+         // rotation R_e. Since the kernel scatters T_i K0 T_j^T, fold R into the
+         // node transforms (T -> T*R) so it scatters T_i (R K0 R^T) T_j^T. R is
+         // recomputed from the current node positions (fresh each step; corotated
+         // is excluded from hasConstantStiffness so this method runs every step).
+         RotationMatrix3d Re = null;
+         if (mat.isCorotated()) {
+            StiffnessWarper3d warper = e.getStiffnessWarper(1.0);
+            warper.computeWarpingRotation (e);
+            Re = warper.getRotation();
+         }
+
          int nn = e.myNodes.length;
          int[] tdim = new int[nn];   // target block dim per local node (3/6)
          int[] tgt = new int[nn];    // target solve index per local node
@@ -4443,6 +4488,10 @@ PointAttachable, ConnectableBody {
             // per-node master-slave reduction descriptor (free / slave)
             tdim[i] = getGpuNodeReduction (
                nd, nodeTransforms, 18*elemNodeIdx, tmpTarget);
+            if (Re != null) {
+               // fold the corotated warping rotation: T <- T * R_e
+               warpNodeTransform (nodeTransforms, 18*elemNodeIdx, tdim[i], Re);
+            }
             tgt[i] = tmpTarget[0];
             nodeDims[elemNodeIdx] = tdim[i];
             elemNodeIdx++;

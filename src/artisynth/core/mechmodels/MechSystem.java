@@ -348,32 +348,20 @@ public interface MechSystem {
          }
       }
 
-      // Appends the reduced masters of a point: for a PointAttachment with an
-      // active master, the (master solve index, G) pairs where G = -getGT(idx)
-      // (the per-master block mapping the point's 3 DOF to the master); for a
-      // free point, the single (own solve index, 3x3 identity).
+      // Appends the reduced masters of a point: for a PointAttachment whose
+      // (possibly multi-level) chain terminates at an active master, the
+      // (master solve index, G) pairs onto the ultimate active masters (G the
+      // composed per-level transform from DynamicAttachmentWorker); for a free
+      // point, the single (own solve index, 3x3 identity).
       private void collectPointReductionMasters (
          Point p, ArrayList<Integer> targets, ArrayList<MatrixNd> Gs) {
          DynamicAttachment at = p.getAttachment();
-         if (at instanceof PointAttachment) {
-            DynamicComponent[] masters = at.getMasters();
-            boolean anyActive = false;
-            for (DynamicComponent m : masters) {
-               if (m.isActive()) {
-                  anyActive = true;
-                  break;
-               }
-            }
-            if (anyActive) {
-               for (int idx=0; idx<masters.length; idx++) {
-                  MatrixBlock gt = at.getGT (idx);   // -G
-                  MatrixNd G = new MatrixNd (gt);
-                  G.negate();
-                  Gs.add (G);
-                  targets.add (masters[idx].getSolveIndex());
-               }
-               return;
-            }
+         if (at instanceof PointAttachment &&
+             DynamicAttachmentWorker.chainHasActiveMaster (p)) {
+            MatrixNd I = new MatrixNd (3, 3);
+            I.setIdentity();
+            DynamicAttachmentWorker.collectReducedMasters (p, I, targets, Gs);
+            return;
          }
          MatrixNd I = new MatrixNd (3, 3);
          I.setIdentity();

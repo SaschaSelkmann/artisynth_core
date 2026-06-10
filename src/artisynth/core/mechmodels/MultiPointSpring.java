@@ -3831,23 +3831,29 @@ public class MultiPointSpring extends PointSpringBase
       return active;
    }
 
-   // Fills myRedTargets[k]/myRedG[k] from the masters of a slave component's
-   // attachment (target solve indices + G = -getGT(idx) per master). Returns
-   // false (caller keeps the component's own block) if it has no attachment.
+   // Fills myRedTargets[k]/myRedG[k] from the ultimate active masters of a slave
+   // component's (possibly multi-level) attachment chain: target solve indices +
+   // the composed transform G per master. Returns false (caller keeps the
+   // component's own block) if it has no attachment.
    private boolean fillReducedMasters (int k, DynamicComponent c) {
       DynamicAttachment at = c.getAttachment();
-      if (at == null) {
+      if (at == null || at.getMasters().length == 0) {
          return false;
       }
-      DynamicComponent[] masters = at.getMasters();
-      int[] tg = new int[masters.length];
-      MatrixNd[] G = new MatrixNd[masters.length];
-      for (int idx=0; idx<masters.length; idx++) {
-         MatrixBlock gt = at.getGT (idx);   // -G
-         MatrixNd Gm = new MatrixNd (gt);
-         Gm.negate();
-         G[idx] = Gm;
-         tg[idx] = masters[idx].getSolveIndex();
+      // identity sized to the slave's own DOF count (3 for a point, 6 for a
+      // frame); getGT(idx) has colSize == the slave's DOF.
+      int sdof = at.getGT(0).colSize();
+      MatrixNd I = new MatrixNd (sdof, sdof);
+      I.setIdentity();
+      ArrayList<Integer> targets = new ArrayList<>();
+      ArrayList<MatrixNd> Gs = new ArrayList<>();
+      DynamicAttachmentWorker.collectReducedMasters (c, I, targets, Gs);
+      int n = targets.size();
+      int[] tg = new int[n];
+      MatrixNd[] G = new MatrixNd[n];
+      for (int i=0; i<n; i++) {
+         tg[i] = targets.get(i);
+         G[i] = Gs.get(i);
       }
       myRedTargets[k] = tg;
       myRedG[k] = G;
@@ -3857,7 +3863,8 @@ public class MultiPointSpring extends PointSpringBase
    private static boolean attachmentHasActiveMaster (DynamicAttachment at) {
       if (at != null) {
          for (DynamicComponent m : at.getMasters()) {
-            if (m.isActive()) {
+            if (m.isActive() ||
+                DynamicAttachmentWorker.chainHasActiveMaster (m)) {
                return true;
             }
          }

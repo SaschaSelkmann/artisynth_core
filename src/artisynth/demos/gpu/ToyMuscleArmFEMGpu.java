@@ -63,8 +63,14 @@ public class ToyMuscleArmFEMGpu extends ToyMuscleArmFEM {
    public void build (String[] args) throws IOException {
       super.build (args);
 
-      // Route through the GPU device-assembly path.
-      myMech.setMatrixSolver (SparseSolverId.CuDss);
+      // Route through the GPU device-assembly path. The solver may be overridden
+      // (e.g. to Pardiso) via -Dartisynth.gpuAssembly.solver=Pardiso for
+      // cuDSS-vs-Pardiso equivalence comparisons.
+      String solverProp = System.getProperty ("artisynth.gpuAssembly.solver");
+      SparseSolverId solver =
+         "Pardiso".equalsIgnoreCase (solverProp) ?
+            SparseSolverId.Pardiso : SparseSolverId.CuDss;
+      myMech.setMatrixSolver (solver);
       myMech.setIntegrator (
          MechSystemSolver.Integrator.ConstrainedBackwardEuler);
 
@@ -88,8 +94,15 @@ public class ToyMuscleArmFEMGpu extends ToyMuscleArmFEM {
          name, widthX, widthY, lengthZ, elemX, elemY, elemZ, density,
          youngsModulus, poissonsRatio, particleDamping, stiffnessDamping,
          zCenter);
+      // COROTATED linear material (the original physics): the links undergo large
+      // rigid-body rotation about the joints, which non-corotated linear
+      // elasticity would lock against. The GPU linear-elastic geometry kernel now
+      // supports corotated (it folds the per-element warping rotation into the
+      // node transforms), so this runs on-device AND behaves like the CPU
+      // original. -DnonCorotated=true forces non-corotated for comparison.
+      boolean coro = !Boolean.getBoolean ("nonCorotated");
       LinearMaterial mat =
-         new LinearMaterial (youngsModulus, poissonsRatio, /*corotated=*/false);
+         new LinearMaterial (youngsModulus, poissonsRatio, /*corotated=*/coro);
       mat.setCorotatedMode (PropertyMode.Explicit);
       fem.setMaterial (mat);
       return fem;

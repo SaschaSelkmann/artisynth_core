@@ -1572,6 +1572,45 @@ public class RigidBody extends Frame implements CollidableBody, HasSurfaceMesh,
       }
    }
 
+   // GPU velocity-Jacobian hook. Beyond the frame/rotary damping handled by
+   // Frame, a RigidBody's inertial damping adds -s*inertialDamping*MR (MR = the
+   // rotated effective spatial inertia) to its own 6x6 solve block -- the device
+   // equivalent of the scaledAdd in addVelJacobian above. Mirroring it here keeps
+   // a body's inertial damping on the device path (otherwise it is silently
+   // dropped, leaving the M-block velocity Jacobian wrong for any model with
+   // nonzero inertial damping).
+   @Override
+   protected boolean assembleVelJacobianCrs (
+      MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      super.assembleVelJacobianCrs (context, s, asValues);
+      if (mySolveBlockNum != -1 && myInertialDamping != 0) {
+         SpatialInertia SI = getEffectiveInertia();
+         Matrix6d MR = new Matrix6d();
+         SI.getRotated (MR, getPose().R);
+         double scale = -s*myInertialDamping;
+         SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap = context.getSlotMap();
+         for (int i=0; i<6; i++) {
+            for (int j=0; j<6; j++) {
+               double v = scale*MR.get(i,j);
+               if (v == 0) {
+                  continue;
+               }
+               int slot = slotMap.getBlockValueSlot (mySolveBlockNum, i, j);
+               if (slot < 0) {
+                  continue;
+               }
+               if (asValues) {
+                  context.getCrsValues()[slot] += v;
+               }
+               else {
+                  context.addCrsValueContribution (slot, v);
+               }
+            }
+         }
+      }
+      return true;
+   }
+
    /**
     * {@inheritDoc}
     */

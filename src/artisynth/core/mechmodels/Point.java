@@ -211,11 +211,10 @@ public class Point extends DynamicComponentBase
    public boolean isGpuReducibleSlave() {
       DynamicAttachment at = getAttachment();
       if (at instanceof PointAttachment) {
-         for (DynamicComponent m : at.getMasters()) {
-            if (m.isActive()) {
-               return true;
-            }
-         }
+         // reducible if the (possibly multi-level) attachment chain terminates
+         // at an active master, e.g. a FemMarker on FEM nodes that are in turn
+         // attached to an active rigid body
+         return DynamicAttachmentWorker.chainHasActiveMaster (this);
       }
       return false;
    }

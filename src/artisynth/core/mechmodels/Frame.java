@@ -933,7 +933,7 @@ public class Frame extends DynamicComponentBase
    // diagonal solve block. The *Values variants write only the CPU CRS
    // reference (used by the J*v term / verifyCrs); the *Contributions variants
    // emit the device descriptors. Mirrors addVelJacobian / addFrameDamping.
-   private boolean assembleVelJacobianCrs (
+   protected boolean assembleVelJacobianCrs (
       MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
       if (mySolveBlockNum != -1 &&
           (myFrameDamping != 0 || myRotaryDamping != 0)) {
