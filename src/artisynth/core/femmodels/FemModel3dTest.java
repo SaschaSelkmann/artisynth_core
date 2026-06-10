@@ -1109,6 +1109,95 @@ public class FemModel3dTest extends UnitTest {
          "constrained (KKT) cuDSS equivalence ok: max="+max+" (ref="+ref+")");
    }
 
+   // Steps a chain of FREE particles strung on a single MultiPointSpring (one
+   // fixed anchor) under gravity, optionally wrapping an active rigid cylinder.
+   // Free particles (not frame markers on a body) keep the only GPU
+   // contributions the particle point-damping (Point CRS hooks) plus the
+   // multipoint-spring Jacobian (MultiPointSpring CRS hooks), so it guards both.
+   // With wrap=true the strand wraps an active cylinder, exercising the 6x6
+   // wrappable-frame blocks (the wrap geometry stays on the host; only the block
+   // scatter is on the device). Not FEM, but lives with the other cuDSS-vs-
+   // Pardiso GPU-assembly equivalence tests.
+   private double[] runMultiPointSpringStep (
+      maspack.solvers.SparseSolverId solverId, boolean wrap) {
+
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+
+      Particle p0 = new Particle (1.0, 0.0, 0.0, 0.0);
+      p0.setDynamic (false);
+      mech.addParticle (p0);
+      Particle p1 = new Particle (1.0, 0.2, 0.0, 0.0);
+      mech.addParticle (p1);
+      Particle p2 = new Particle (1.0, 0.8, 0.0, 0.0);
+      mech.addParticle (p2);
+      Particle p3 = new Particle (1.0, 1.0, 0.0, 0.0);
+      mech.addParticle (p3);
+
+      MultiPointSpring spring = new MultiPointSpring (100.0, 1.0, 0.0);
+      spring.addPoint (p0);
+      spring.addPoint (p1);
+      if (wrap) {
+         spring.setSegmentWrappable (50);   // p1->p2 segment is wrappable
+      }
+      spring.addPoint (p2);
+      spring.addPoint (p3);
+      if (wrap) {
+         // active cylinder across the straight p1->p2 segment so the strand must
+         // wrap over it (axis along y); its 6x6 frame block is an active DOF.
+         RigidBody cyl = RigidBody.createCylinder (
+            "cyl", 0.25, 0.6, 50.0, 24);
+         cyl.setPose (new RigidTransform3d (
+            new Vector3d (0.5, 0.0, -0.2),
+            new AxisAngle (1, 0, 0, Math.PI/2)));
+         mech.addRigidBody (cyl);
+         spring.addWrappable (cyl);
+         spring.updateWrapSegments();
+         // guard the test itself: confirm the strand actually wraps (bends
+         // around the obstacle, so its length exceeds the 1.0 straight chord)
+         if (!spring.hasWrappableSegments() ||
+             spring.getActiveLength() <= 1.0 + 1e-4) {
+            throw new TestException (
+               "MultiPointSpring wrap test not actually wrapping: length="+
+               spring.getActiveLength());
+         }
+      }
+      mech.addMultiPointSpring (spring);
+
+      double h = 0.005;
+      for (int i=0; i<6; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testMultiPointSpringEquivalence (boolean wrap) {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu =
+         runMultiPointSpringStep (maspack.solvers.SparseSolverId.CuDss, wrap);
+      double[] cpu =
+         runMultiPointSpringStep (maspack.solvers.SparseSolverId.Pardiso, wrap);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (max > tol) {
+         throw new TestException (
+            "MultiPointSpring (wrap="+wrap+") cuDSS vs Pardiso velocity "+
+            "mismatch: max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "MultiPointSpring (wrap="+wrap+") cuDSS equivalence ok: max="+max+
+         " (ref="+ref+")");
+   }
+
    // Steps a non-corotated linear FEM beam whose free-end nodes are attached to
    // an ACTIVE (dynamic) rigid body, under ConstrainedBackwardEuler (KKT). This
    // is the FemBeamWithActiveBody scenario: the master-slave reduction (G^T K G
@@ -1252,6 +1341,8 @@ public class FemModel3dTest extends UnitTest {
       testBackwardEulerSpringEquivalence();
       testBackwardEulerFreeBodyEquivalence();
       testBackwardEulerActiveBodyAttachmentEquivalence();
+      testMultiPointSpringEquivalence (/*wrap=*/false);
+      testMultiPointSpringEquivalence (/*wrap=*/true);
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();
       testSetNumbering();

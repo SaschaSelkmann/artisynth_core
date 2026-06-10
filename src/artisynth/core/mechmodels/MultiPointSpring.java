@@ -133,6 +133,14 @@ public class MultiPointSpring extends PointSpringBase
    protected ArrayList<WrappableSpec> myWrappables;
    protected int myNumBlks; // set to numPoints()
    protected int[] mySolveBlkNums;
+
+   // GPU assembly: when non-null, applyBlock redirects its block contribution to
+   // this context's CRS arrays (instead of the SparseNumberedBlockMatrix), so
+   // the existing addSegmentPos/VelBlocks logic is shared between the host and
+   // device assembly paths. myCrsAsValues selects the device descriptor path
+   // (false) vs the CPU CRS reference (true; used by the J*v / verifyCrs term).
+   private transient MechSystem.GpuAssemblyContext myCrsContext = null;
+   private transient boolean myCrsAsValues = false;
    protected int myHasWrappableSegs = -1; // -1 means we don't know
    protected int myHasConditionalPoints = -1; // -1 means we don't know
    protected int myHasMovingMarkers = -1; // -1 means we don't know
@@ -3648,10 +3656,18 @@ public class MultiPointSpring extends PointSpringBase
       boolean Jenabled = true;
 
       int blkNum = mySolveBlkNums[bi*myNumBlks+bj];
+      if (blkNum == -1) {
+         return;
+      }
+      if (myCrsContext != null) {
+         // GPU path: scatter the same s*Ji^T X Jj block to the context CRS.
+         scatterBlockCrs (blkNum, Ji, Jj, X, s);
+         return;
+      }
       int nump = numPoints();
       MatrixBlock blk = M.getBlockByNumber (blkNum);
 
-      if (blkNum != -1) {
+      {
          if (Ji == null) {
             if (Jj == null) {
                // blk is 3 x 3
@@ -3680,6 +3696,122 @@ public class MultiPointSpring extends PointSpringBase
             }
          }
       }
+   }
+
+   // GPU assembly: scatter the block contribution s*Ji^T X Jj (the same value
+   // applyBlock would add to block blkNum) into the context CRS. Computes the
+   // contribution into a freshly allocated block of the right size (reusing the
+   // exact applyBlock math), then scatters its entries via the slot map. Handles
+   // 3x3 / 3x6 / 6x3 / 6x6 (point vs wrappable-frame endpoints) through the
+   // generic per-entry path, so no per-size device kernel is needed.
+   private void scatterBlockCrs (
+      int blkNum, Matrix3x6 Ji, Matrix3x6 Jj, Matrix3dBase X, double s) {
+
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap =
+         myCrsContext.getSlotMap();
+      if (!slotMap.hasBlockSlots (blkNum)) {
+         return;
+      }
+      int rowSize = (Ji == null ? 3 : 6);
+      int colSize = (Jj == null ? 3 : 6);
+      MatrixBlock B = MatrixBlockBase.alloc (rowSize, colSize);
+      if (Ji == null) {
+         if (Jj == null) {
+            B.scaledAdd (s, X);                  // 3 x 3
+         }
+         else {
+            Matrix3d Xs = new Matrix3d (X);
+            Xs.scale (s);
+            B.mulAdd (Xs, Jj);                   // 3 x 6
+         }
+      }
+      else {
+         if (Jj == null) {
+            Matrix3d Xs = new Matrix3d (X);
+            Xs.scale (s);
+            B.mulTransposeLeftAdd (Ji, Xs);      // 6 x 3
+         }
+         else {
+            Matrix3x6 XsJj = new Matrix3x6();
+            MatrixMulAdd.mulAdd3x6 (XsJj, X, Jj);
+            XsJj.scale (s);
+            B.mulTransposeLeftAdd (Ji, XsJj);    // 6 x 6
+         }
+      }
+      double[] vals = myCrsAsValues ? myCrsContext.getCrsValues() : null;
+      for (int r=0; r<rowSize; r++) {
+         for (int c=0; c<colSize; c++) {
+            double v = B.get (r, c);
+            if (v == 0) {
+               continue;
+            }
+            int slot = slotMap.getBlockValueSlot (blkNum, r, c);
+            if (slot < 0) {
+               continue;
+            }
+            if (myCrsAsValues) {
+               vals[slot] += v;
+            }
+            else {
+               myCrsContext.addCrsValueContribution (slot, v);
+            }
+         }
+      }
+   }
+
+   // Shared driver for the four GPU CRS hooks: routes the existing
+   // addPos/VelJacobian assembly (and the wrap/segment state updates it
+   // performs) onto the context CRS via the myCrsContext redirect in applyBlock.
+   // M is unused on this path (applyBlock never dereferences it when
+   // myCrsContext is set).
+   private boolean assemblePosJacobianCrs (
+      MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      myCrsContext = context;
+      myCrsAsValues = asValues;
+      try {
+         addPosJacobian (null, s);
+      }
+      finally {
+         myCrsContext = null;
+      }
+      return true;
+   }
+
+   private boolean assembleVelJacobianCrs (
+      MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      myCrsContext = context;
+      myCrsAsValues = asValues;
+      try {
+         addVelJacobian (null, s);
+      }
+      finally {
+         myCrsContext = null;
+      }
+      return true;
+   }
+
+   @Override
+   public boolean assemblePosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assemblePosJacobianCrs (context, s, /*asValues=*/false);
+   }
+
+   @Override
+   public boolean assemblePosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assemblePosJacobianCrs (context, s, /*asValues=*/true);
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assembleVelJacobianCrs (context, s, /*asValues=*/false);
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return assembleVelJacobianCrs (context, s, /*asValues=*/true);
    }
 
    /**

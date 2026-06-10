@@ -172,6 +172,62 @@ public class Point extends DynamicComponentBase
       // nothing to do
    }
 
+   // GPU assembly: a point's only force-effector Jacobian is the point damping
+   // on its 3x3 solve-block diagonal (mirrors addVelJacobian/addToSolveBlock-
+   // Diagonal); position Jacobian is empty. The *Values variants write only the
+   // CPU CRS reference; the *Contributions variants emit the device descriptor.
+   // An attached point has solveIndex -1 and contributes nothing.
+   @Override
+   public boolean assemblePosJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return true;   // empty
+   }
+
+   @Override
+   public boolean assemblePosJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      return true;   // empty
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValueContributions (
+      MechSystem.GpuAssemblyContext context, double s) {
+      addPointDampingCrs (context, s, /*asValues=*/false);
+      return true;
+   }
+
+   @Override
+   public boolean assembleVelJacobianCrsValues (
+      MechSystem.GpuAssemblyContext context, double s) {
+      addPointDampingCrs (context, s, /*asValues=*/true);
+      return true;
+   }
+
+   private void addPointDampingCrs (
+      MechSystem.GpuAssemblyContext context, double s, boolean asValues) {
+      int blkNum = getSolveIndex();
+      if (myPointDamping == 0 || blkNum == -1) {
+         return;
+      }
+      SparseNumberedBlockMatrix.CrsBlockSlotMap slotMap = context.getSlotMap();
+      if (!slotMap.hasBlockSlots (blkNum)) {
+         return;
+      }
+      double d = -s * myPointDamping;
+      int s0 = slotMap.getBlockValueSlot (blkNum, 0, 0);
+      int s1 = slotMap.getBlockValueSlot (blkNum, 1, 1);
+      int s2 = slotMap.getBlockValueSlot (blkNum, 2, 2);
+      if (asValues) {
+         double[] vals = context.getCrsValues();
+         if (s0 >= 0) vals[s0] += d;
+         if (s1 >= 0) vals[s1] += d;
+         if (s2 >= 0) vals[s2] += d;
+      }
+      else {
+         context.addScaledDiagonal3CrsValueContribution (s0, s1, s2, d);
+      }
+   }
+
    public void addSolveBlocks (SparseNumberedBlockMatrix S) {
       // nothing to do
    }
