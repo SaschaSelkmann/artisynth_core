@@ -104,9 +104,11 @@ public class CuDssSolver implements DirectSolver {
       double[] Ds, double[] sigmas, double[] dvs, int nblocks,
       double scale);
    private static native int    doAddMaterialStiffness3ElementDeviceValues (
-      long handle, int[] elemNodeCounts, int[] elemPairOffsets,
+      long handle, int[] elemNodeCounts, int[] elemNodeOffsets,
+      int[] elemPairOffsets,
       int[] elemIpOffsets, int[] elemGradOffsets, int[] pairNodeIdxs,
-      int[] blockSlots, double[] grads, double[] Ds, double[] sigmas,
+      int[] blockSlots, int[] nodeDims, double[] nodeTransforms,
+      double[] grads, double[] Ds, double[] sigmas,
       double[] dvs, int nelems, double scale);
    private static native int    doAddLinearElasticStiffness3ElementDeviceValues (
       long handle, int[] elemNodeCounts, int[] elemPairOffsets,
@@ -121,9 +123,11 @@ public class CuDssSolver implements DirectSolver {
       double[] elemParams, double[] elemNodePositions,
       double[] naturalGrads, double[] ipWeights, int nelems, double scale);
    private static native int    doAddDilationalStiffness3ElementDeviceValues (
-      long handle, int[] elemNodeCounts, int[] elemPressureCounts,
+      long handle, int[] elemNodeCounts, int[] elemNodeOffsets,
+      int[] elemPressureCounts,
       int[] elemPairOffsets, int[] elemConstraintOffsets,
       int[] elemRinvOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      int[] nodeDims, double[] nodeTransforms,
       double[] constraints, double[] rinvs, int nelems, double scale);
    private static native int    doFactorDeviceValues (long handle);
    private static native int    doSolve   (long handle, double[] b, double[] x);
@@ -577,12 +581,17 @@ public class CuDssSolver implements DirectSolver {
     * contributions on the GPU. Per element, {@code elemPairOffsets} indexes
     * K-node-pair data, {@code elemIpOffsets} indexes D/sigma/dv data, and
     * {@code elemGradOffsets} indexes gradient vectors. Each pair stores two
-    * node indices and 9 CRS slots; each integration point stores one 6x6 D,
-    * one symmetric sigma, one dv, and {@code elemNodeCounts[e]} gradients.
+    * node indices and 36 CRS slots (row-major {@code rowDim x colDim} of the
+    * reduced target block); each integration point stores one 6x6 D, one
+    * symmetric sigma, one dv, and {@code elemNodeCounts[e]} gradients. Each
+    * element node carries a target dimension (3 for free nodes, 6 for
+    * frame-attached slaves) and an 18-double row-major reduction transform.
     */
    public synchronized void addMaterialStiffness3ElementDeviceValues (
-      int[] elemNodeCounts, int[] elemPairOffsets, int[] elemIpOffsets,
+      int[] elemNodeCounts, int[] elemNodeOffsets,
+      int[] elemPairOffsets, int[] elemIpOffsets,
       int[] elemGradOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      int[] nodeDims, double[] nodeTransforms,
       double[] grads, double[] Ds, double[] sigmas, double[] dvs,
       int nelems, double scale) {
       if (myState == UNSET) {
@@ -590,18 +599,22 @@ public class CuDssSolver implements DirectSolver {
       }
       if (nelems < 0 ||
           nelems > elemNodeCounts.length ||
+          nelems+1 > elemNodeOffsets.length ||
           nelems+1 > elemPairOffsets.length ||
           nelems+1 > elemIpOffsets.length ||
           nelems+1 > elemGradOffsets.length) {
          throw new IllegalArgumentException (
             "nelems exceeds compact material stiffness element arrays");
       }
+      int nnodes = elemNodeOffsets[nelems];
       int npairs = elemPairOffsets[nelems];
       int nips = elemIpOffsets[nelems];
       int ngrads = elemGradOffsets[nelems];
-      if (npairs < 0 || nips < 0 || ngrads < 0 ||
+      if (nnodes < 0 || npairs < 0 || nips < 0 || ngrads < 0 ||
           npairs > pairNodeIdxs.length/2 ||
-          npairs > blockSlots.length/9 ||
+          npairs > blockSlots.length/36 ||
+          nnodes > nodeDims.length ||
+          nnodes > nodeTransforms.length/18 ||
           nips > Ds.length/36 ||
           nips > sigmas.length/6 ||
           nips > dvs.length ||
@@ -611,8 +624,10 @@ public class CuDssSolver implements DirectSolver {
       }
       check (
          doAddMaterialStiffness3ElementDeviceValues (
-            myHandle, elemNodeCounts, elemPairOffsets, elemIpOffsets,
-            elemGradOffsets, pairNodeIdxs, blockSlots, grads, Ds, sigmas,
+            myHandle, elemNodeCounts, elemNodeOffsets, elemPairOffsets,
+            elemIpOffsets,
+            elemGradOffsets, pairNodeIdxs, blockSlots, nodeDims,
+            nodeTransforms, grads, Ds, sigmas,
             dvs, nelems, scale),
          "addMaterialStiffness3ElementDeviceValues");
    }
@@ -716,15 +731,18 @@ public class CuDssSolver implements DirectSolver {
     * constraint block for each element node.
     */
    public synchronized void addDilationalStiffness3ElementDeviceValues (
-      int[] elemNodeCounts, int[] elemPressureCounts,
+      int[] elemNodeCounts, int[] elemNodeOffsets,
+      int[] elemPressureCounts,
       int[] elemPairOffsets, int[] elemConstraintOffsets,
       int[] elemRinvOffsets, int[] pairNodeIdxs, int[] blockSlots,
+      int[] nodeDims, double[] nodeTransforms,
       double[] constraints, double[] rinvs, int nelems, double scale) {
       if (myState == UNSET) {
          throw new ImproperStateException ("analyze() not previously called");
       }
       if (nelems < 0 ||
           nelems > elemNodeCounts.length ||
+          nelems+1 > elemNodeOffsets.length ||
           nelems > elemPressureCounts.length ||
           nelems+1 > elemPairOffsets.length ||
           nelems+1 > elemConstraintOffsets.length ||
@@ -732,12 +750,15 @@ public class CuDssSolver implements DirectSolver {
          throw new IllegalArgumentException (
             "nelems exceeds compact dilational element arrays");
       }
+      int nnodes = elemNodeOffsets[nelems];
       int npairs = elemPairOffsets[nelems];
       int nconstraints = elemConstraintOffsets[nelems];
       int nrinv = elemRinvOffsets[nelems];
-      if (npairs < 0 || nconstraints < 0 || nrinv < 0 ||
+      if (nnodes < 0 || npairs < 0 || nconstraints < 0 || nrinv < 0 ||
           npairs > pairNodeIdxs.length/2 ||
-          npairs > blockSlots.length/9 ||
+          npairs > blockSlots.length/36 ||
+          nnodes > nodeDims.length ||
+          nnodes > nodeTransforms.length/18 ||
           nconstraints > constraints.length/3 ||
           nrinv > rinvs.length) {
          throw new IllegalArgumentException (
@@ -745,8 +766,10 @@ public class CuDssSolver implements DirectSolver {
       }
       check (
          doAddDilationalStiffness3ElementDeviceValues (
-            myHandle, elemNodeCounts, elemPressureCounts, elemPairOffsets,
+            myHandle, elemNodeCounts, elemNodeOffsets, elemPressureCounts,
+            elemPairOffsets,
             elemConstraintOffsets, elemRinvOffsets, pairNodeIdxs, blockSlots,
+            nodeDims, nodeTransforms,
             constraints, rinvs, nelems, scale),
          "addDilationalStiffness3ElementDeviceValues");
    }

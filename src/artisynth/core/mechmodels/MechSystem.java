@@ -53,16 +53,22 @@ public interface MechSystem {
       private double[] myMaterialStiffness3Dvs;
       private int myNumMaterialStiffness3Contributions;
       private int[] myMaterialStiffness3ElemNodeCounts;
+      private int[] myMaterialStiffness3ElemNodeOffsets;
       private int[] myMaterialStiffness3ElemPairOffsets;
       private int[] myMaterialStiffness3ElemIpOffsets;
       private int[] myMaterialStiffness3ElemGradOffsets;
       private int[] myMaterialStiffness3PairNodeIdxs;
       private int[] myMaterialStiffness3ElemBlockSlots;
+      // Per-element-node master-slave reduction data; see the matching
+      // geometry-kernel fields below.
+      private int[] myMaterialStiffness3NodeDims;
+      private double[] myMaterialStiffness3NodeTransforms;
       private double[] myMaterialStiffness3ElemGrads;
       private double[] myMaterialStiffness3ElemDs;
       private double[] myMaterialStiffness3ElemSigmas;
       private double[] myMaterialStiffness3ElemDvs;
       private int myNumMaterialStiffness3ElemContributions;
+      private int myNumMaterialStiffness3ElemNodes;
       private int myNumMaterialStiffness3ElemPairs;
       private int myNumMaterialStiffness3ElemIps;
       private int myNumMaterialStiffness3ElemGradVecs;
@@ -101,15 +107,19 @@ public interface MechSystem {
       private int myNumLinearElasticGeometry3ElemIps;
       private int myNumLinearElasticGeometry3ElemNaturalGradVecs;
       private int[] myDilationalStiffness3ElemNodeCounts;
+      private int[] myDilationalStiffness3ElemNodeOffsets;
       private int[] myDilationalStiffness3ElemPressureCounts;
       private int[] myDilationalStiffness3ElemPairOffsets;
       private int[] myDilationalStiffness3ElemConstraintOffsets;
       private int[] myDilationalStiffness3ElemRinvOffsets;
       private int[] myDilationalStiffness3PairNodeIdxs;
       private int[] myDilationalStiffness3ElemBlockSlots;
+      private int[] myDilationalStiffness3NodeDims;
+      private double[] myDilationalStiffness3NodeTransforms;
       private double[] myDilationalStiffness3ElemConstraints;
       private double[] myDilationalStiffness3ElemRinvs;
       private int myNumDilationalStiffness3ElemContributions;
+      private int myNumDilationalStiffness3ElemNodes;
       private int myNumDilationalStiffness3ElemPairs;
       private int myNumDilationalStiffness3ElemConstraints;
       private int myNumDilationalStiffness3ElemRinvs;
@@ -147,16 +157,20 @@ public interface MechSystem {
          myMaterialStiffness3Dvs = new double[0];
          myNumMaterialStiffness3Contributions = 0;
          myMaterialStiffness3ElemNodeCounts = new int[0];
+         myMaterialStiffness3ElemNodeOffsets = new int[] { 0 };
          myMaterialStiffness3ElemPairOffsets = new int[] { 0 };
          myMaterialStiffness3ElemIpOffsets = new int[] { 0 };
          myMaterialStiffness3ElemGradOffsets = new int[] { 0 };
          myMaterialStiffness3PairNodeIdxs = new int[0];
          myMaterialStiffness3ElemBlockSlots = new int[0];
+         myMaterialStiffness3NodeDims = new int[0];
+         myMaterialStiffness3NodeTransforms = new double[0];
          myMaterialStiffness3ElemGrads = new double[0];
          myMaterialStiffness3ElemDs = new double[0];
          myMaterialStiffness3ElemSigmas = new double[0];
          myMaterialStiffness3ElemDvs = new double[0];
          myNumMaterialStiffness3ElemContributions = 0;
+         myNumMaterialStiffness3ElemNodes = 0;
          myNumMaterialStiffness3ElemPairs = 0;
          myNumMaterialStiffness3ElemIps = 0;
          myNumMaterialStiffness3ElemGradVecs = 0;
@@ -192,15 +206,19 @@ public interface MechSystem {
          myNumLinearElasticGeometry3ElemIps = 0;
          myNumLinearElasticGeometry3ElemNaturalGradVecs = 0;
          myDilationalStiffness3ElemNodeCounts = new int[0];
+         myDilationalStiffness3ElemNodeOffsets = new int[] { 0 };
          myDilationalStiffness3ElemPressureCounts = new int[0];
          myDilationalStiffness3ElemPairOffsets = new int[] { 0 };
          myDilationalStiffness3ElemConstraintOffsets = new int[] { 0 };
          myDilationalStiffness3ElemRinvOffsets = new int[] { 0 };
          myDilationalStiffness3PairNodeIdxs = new int[0];
          myDilationalStiffness3ElemBlockSlots = new int[0];
+         myDilationalStiffness3NodeDims = new int[0];
+         myDilationalStiffness3NodeTransforms = new double[0];
          myDilationalStiffness3ElemConstraints = new double[0];
          myDilationalStiffness3ElemRinvs = new double[0];
          myNumDilationalStiffness3ElemContributions = 0;
+         myNumDilationalStiffness3ElemNodes = 0;
          myNumDilationalStiffness3ElemPairs = 0;
          myNumDilationalStiffness3ElemConstraints = 0;
          myNumDilationalStiffness3ElemRinvs = 0;
@@ -229,6 +247,7 @@ public interface MechSystem {
          myNumScaledBlock3Contributions = 0;
          myNumMaterialStiffness3Contributions = 0;
          myNumMaterialStiffness3ElemContributions = 0;
+         myNumMaterialStiffness3ElemNodes = 0;
          myNumMaterialStiffness3ElemPairs = 0;
          myNumMaterialStiffness3ElemIps = 0;
          myNumMaterialStiffness3ElemGradVecs = 0;
@@ -242,9 +261,11 @@ public interface MechSystem {
          myNumLinearElasticGeometry3ElemIps = 0;
          myNumLinearElasticGeometry3ElemNaturalGradVecs = 0;
          myNumDilationalStiffness3ElemContributions = 0;
+         myNumDilationalStiffness3ElemNodes = 0;
          myNumDilationalStiffness3ElemPairs = 0;
          myNumDilationalStiffness3ElemConstraints = 0;
          myNumDilationalStiffness3ElemRinvs = 0;
+         myMaterialStiffness3ElemNodeOffsets[0] = 0;
          myMaterialStiffness3ElemPairOffsets[0] = 0;
          myMaterialStiffness3ElemIpOffsets[0] = 0;
          myMaterialStiffness3ElemGradOffsets[0] = 0;
@@ -255,6 +276,7 @@ public interface MechSystem {
          myLinearElasticGeometry3ElemPairOffsets[0] = 0;
          myLinearElasticGeometry3ElemIpOffsets[0] = 0;
          myLinearElasticGeometry3ElemNaturalGradOffsets[0] = 0;
+         myDilationalStiffness3ElemNodeOffsets[0] = 0;
          myDilationalStiffness3ElemPairOffsets[0] = 0;
          myDilationalStiffness3ElemConstraintOffsets[0] = 0;
          myDilationalStiffness3ElemRinvOffsets[0] = 0;
@@ -662,27 +684,32 @@ public interface MechSystem {
       }
 
       public void addMaterialStiffness3ElementCrsValueContributions (
-         int[] elemNodeCounts, int[] elemPairOffsets, int[] elemIpOffsets,
+         int[] elemNodeCounts, int[] elemNodeOffsets,
+         int[] elemPairOffsets, int[] elemIpOffsets,
          int[] elemGradOffsets, int[] pairNodeIdxs, int[] blockSlots,
+         int[] nodeDims, double[] nodeTransforms,
          double[] grads, double[] Ds, double[] sigmas, double[] dvs,
          int nelems) {
 
          if (nelems == 0) {
             return;
          }
+         int nnodes = elemNodeOffsets[nelems];
          int npairs = elemPairOffsets[nelems];
          int nips = elemIpOffsets[nelems];
          int ngrads = elemGradOffsets[nelems];
-         if (npairs == 0 || nips == 0 || ngrads == 0) {
+         if (nnodes == 0 || npairs == 0 || nips == 0 || ngrads == 0) {
             return;
          }
          ensureMaterialStiffness3ElementCapacity (
             myNumMaterialStiffness3ElemContributions + nelems,
+            myNumMaterialStiffness3ElemNodes + nnodes,
             myNumMaterialStiffness3ElemPairs + npairs,
             myNumMaterialStiffness3ElemIps + nips,
             myNumMaterialStiffness3ElemGradVecs + ngrads);
 
          int elemBase = myNumMaterialStiffness3ElemContributions;
+         int nodeBase = myNumMaterialStiffness3ElemNodes;
          int pairBase = myNumMaterialStiffness3ElemPairs;
          int ipBase = myNumMaterialStiffness3ElemIps;
          int gradBase = myNumMaterialStiffness3ElemGradVecs;
@@ -691,6 +718,8 @@ public interface MechSystem {
             elemNodeCounts, 0, myMaterialStiffness3ElemNodeCounts,
             elemBase, nelems);
          for (int i=1; i<=nelems; i++) {
+            myMaterialStiffness3ElemNodeOffsets[elemBase+i] =
+               nodeBase + elemNodeOffsets[i];
             myMaterialStiffness3ElemPairOffsets[elemBase+i] =
                pairBase + elemPairOffsets[i];
             myMaterialStiffness3ElemIpOffsets[elemBase+i] =
@@ -703,7 +732,13 @@ public interface MechSystem {
             2*pairBase, 2*npairs);
          System.arraycopy (
             blockSlots, 0, myMaterialStiffness3ElemBlockSlots,
-            9*pairBase, 9*npairs);
+            36*pairBase, 36*npairs);
+         System.arraycopy (
+            nodeDims, 0, myMaterialStiffness3NodeDims,
+            nodeBase, nnodes);
+         System.arraycopy (
+            nodeTransforms, 0, myMaterialStiffness3NodeTransforms,
+            18*nodeBase, 18*nnodes);
          System.arraycopy (
             grads, 0, myMaterialStiffness3ElemGrads, 3*gradBase, 3*ngrads);
          System.arraycopy (
@@ -714,13 +749,14 @@ public interface MechSystem {
             dvs, 0, myMaterialStiffness3ElemDvs, ipBase, nips);
 
          myNumMaterialStiffness3ElemContributions += nelems;
+         myNumMaterialStiffness3ElemNodes += nnodes;
          myNumMaterialStiffness3ElemPairs += npairs;
          myNumMaterialStiffness3ElemIps += nips;
          myNumMaterialStiffness3ElemGradVecs += ngrads;
       }
 
       private void ensureMaterialStiffness3ElementCapacity (
-         int nelems, int npairs, int nips, int ngrads) {
+         int nelems, int nnodes, int npairs, int nips, int ngrads) {
 
          if (myMaterialStiffness3ElemNodeCounts.length < nelems) {
             int newCap = Math.max (
@@ -728,12 +764,22 @@ public interface MechSystem {
                Math.max (64, 2*myMaterialStiffness3ElemNodeCounts.length));
             myMaterialStiffness3ElemNodeCounts =
                Arrays.copyOf (myMaterialStiffness3ElemNodeCounts, newCap);
+            myMaterialStiffness3ElemNodeOffsets =
+               Arrays.copyOf (myMaterialStiffness3ElemNodeOffsets, newCap+1);
             myMaterialStiffness3ElemPairOffsets =
                Arrays.copyOf (myMaterialStiffness3ElemPairOffsets, newCap+1);
             myMaterialStiffness3ElemIpOffsets =
                Arrays.copyOf (myMaterialStiffness3ElemIpOffsets, newCap+1);
             myMaterialStiffness3ElemGradOffsets =
                Arrays.copyOf (myMaterialStiffness3ElemGradOffsets, newCap+1);
+         }
+         if (myMaterialStiffness3NodeDims.length < nnodes) {
+            int newCap = Math.max (
+               nnodes, Math.max (64, 2*myMaterialStiffness3NodeDims.length));
+            myMaterialStiffness3NodeDims =
+               Arrays.copyOf (myMaterialStiffness3NodeDims, newCap);
+            myMaterialStiffness3NodeTransforms =
+               Arrays.copyOf (myMaterialStiffness3NodeTransforms, 18*newCap);
          }
          if (myMaterialStiffness3PairNodeIdxs.length < 2*npairs) {
             int newCap = Math.max (
@@ -744,7 +790,7 @@ public interface MechSystem {
             myMaterialStiffness3PairNodeIdxs =
                Arrays.copyOf (myMaterialStiffness3PairNodeIdxs, 2*newCap);
             myMaterialStiffness3ElemBlockSlots =
-               Arrays.copyOf (myMaterialStiffness3ElemBlockSlots, 9*newCap);
+               Arrays.copyOf (myMaterialStiffness3ElemBlockSlots, 36*newCap);
          }
          if (myMaterialStiffness3ElemDvs.length < nips) {
             int newCap = Math.max (
@@ -1035,27 +1081,32 @@ public interface MechSystem {
       }
 
       public void addDilationalStiffness3ElementCrsValueContributions (
-         int[] elemNodeCounts, int[] elemPressureCounts,
+         int[] elemNodeCounts, int[] elemNodeOffsets,
+         int[] elemPressureCounts,
          int[] elemPairOffsets, int[] elemConstraintOffsets,
          int[] elemRinvOffsets, int[] pairNodeIdxs, int[] blockSlots,
+         int[] nodeDims, double[] nodeTransforms,
          double[] constraints, double[] rinvs, int nelems) {
 
          if (nelems == 0) {
             return;
          }
+         int nnodes = elemNodeOffsets[nelems];
          int npairs = elemPairOffsets[nelems];
          int nconstraints = elemConstraintOffsets[nelems];
          int nrinvs = elemRinvOffsets[nelems];
-         if (npairs == 0 || nconstraints == 0 || nrinvs == 0) {
+         if (nnodes == 0 || npairs == 0 || nconstraints == 0 || nrinvs == 0) {
             return;
          }
          ensureDilationalStiffness3ElementCapacity (
             myNumDilationalStiffness3ElemContributions + nelems,
+            myNumDilationalStiffness3ElemNodes + nnodes,
             myNumDilationalStiffness3ElemPairs + npairs,
             myNumDilationalStiffness3ElemConstraints + nconstraints,
             myNumDilationalStiffness3ElemRinvs + nrinvs);
 
          int elemBase = myNumDilationalStiffness3ElemContributions;
+         int nodeBase = myNumDilationalStiffness3ElemNodes;
          int pairBase = myNumDilationalStiffness3ElemPairs;
          int constraintBase = myNumDilationalStiffness3ElemConstraints;
          int rinvBase = myNumDilationalStiffness3ElemRinvs;
@@ -1067,6 +1118,8 @@ public interface MechSystem {
             elemPressureCounts, 0, myDilationalStiffness3ElemPressureCounts,
             elemBase, nelems);
          for (int i=1; i<=nelems; i++) {
+            myDilationalStiffness3ElemNodeOffsets[elemBase+i] =
+               nodeBase + elemNodeOffsets[i];
             myDilationalStiffness3ElemPairOffsets[elemBase+i] =
                pairBase + elemPairOffsets[i];
             myDilationalStiffness3ElemConstraintOffsets[elemBase+i] =
@@ -1079,7 +1132,13 @@ public interface MechSystem {
             2*pairBase, 2*npairs);
          System.arraycopy (
             blockSlots, 0, myDilationalStiffness3ElemBlockSlots,
-            9*pairBase, 9*npairs);
+            36*pairBase, 36*npairs);
+         System.arraycopy (
+            nodeDims, 0, myDilationalStiffness3NodeDims,
+            nodeBase, nnodes);
+         System.arraycopy (
+            nodeTransforms, 0, myDilationalStiffness3NodeTransforms,
+            18*nodeBase, 18*nnodes);
          System.arraycopy (
             constraints, 0, myDilationalStiffness3ElemConstraints,
             3*constraintBase, 3*nconstraints);
@@ -1087,13 +1146,14 @@ public interface MechSystem {
             rinvs, 0, myDilationalStiffness3ElemRinvs, rinvBase, nrinvs);
 
          myNumDilationalStiffness3ElemContributions += nelems;
+         myNumDilationalStiffness3ElemNodes += nnodes;
          myNumDilationalStiffness3ElemPairs += npairs;
          myNumDilationalStiffness3ElemConstraints += nconstraints;
          myNumDilationalStiffness3ElemRinvs += nrinvs;
       }
 
       private void ensureDilationalStiffness3ElementCapacity (
-         int nelems, int npairs, int nconstraints, int nrinvs) {
+         int nelems, int nnodes, int npairs, int nconstraints, int nrinvs) {
 
          if (myDilationalStiffness3ElemNodeCounts.length < nelems) {
             int newCap = Math.max (
@@ -1101,6 +1161,9 @@ public interface MechSystem {
                Math.max (64, 2*myDilationalStiffness3ElemNodeCounts.length));
             myDilationalStiffness3ElemNodeCounts =
                Arrays.copyOf (myDilationalStiffness3ElemNodeCounts, newCap);
+            myDilationalStiffness3ElemNodeOffsets =
+               Arrays.copyOf (
+                  myDilationalStiffness3ElemNodeOffsets, newCap+1);
             myDilationalStiffness3ElemPressureCounts =
                Arrays.copyOf (
                   myDilationalStiffness3ElemPressureCounts, newCap);
@@ -1114,6 +1177,14 @@ public interface MechSystem {
                Arrays.copyOf (
                   myDilationalStiffness3ElemRinvOffsets, newCap+1);
          }
+         if (myDilationalStiffness3NodeDims.length < nnodes) {
+            int newCap = Math.max (
+               nnodes, Math.max (64, 2*myDilationalStiffness3NodeDims.length));
+            myDilationalStiffness3NodeDims =
+               Arrays.copyOf (myDilationalStiffness3NodeDims, newCap);
+            myDilationalStiffness3NodeTransforms =
+               Arrays.copyOf (myDilationalStiffness3NodeTransforms, 18*newCap);
+         }
          if (myDilationalStiffness3PairNodeIdxs.length < 2*npairs) {
             int newCap = Math.max (
                npairs, Math.max (64, myDilationalStiffness3PairNodeIdxs.length));
@@ -1124,7 +1195,7 @@ public interface MechSystem {
                Arrays.copyOf (myDilationalStiffness3PairNodeIdxs, 2*newCap);
             myDilationalStiffness3ElemBlockSlots =
                Arrays.copyOf (
-                  myDilationalStiffness3ElemBlockSlots, 9*newCap);
+                  myDilationalStiffness3ElemBlockSlots, 36*newCap);
          }
          if (myDilationalStiffness3ElemConstraints.length <
              3*nconstraints) {
@@ -1201,6 +1272,18 @@ public interface MechSystem {
 
       public int numMaterialStiffness3ElementIps() {
          return myNumMaterialStiffness3ElemIps;
+      }
+
+      public int[] getMaterialStiffness3ElementNodeOffsets() {
+         return myMaterialStiffness3ElemNodeOffsets;
+      }
+
+      public int[] getMaterialStiffness3ElementNodeDims() {
+         return myMaterialStiffness3NodeDims;
+      }
+
+      public double[] getMaterialStiffness3ElementNodeTransforms() {
+         return myMaterialStiffness3NodeTransforms;
       }
 
       public int[] getMaterialStiffness3ElementNodeCounts() {
@@ -1365,6 +1448,18 @@ public interface MechSystem {
 
       public int numDilationalStiffness3ElementConstraints() {
          return myNumDilationalStiffness3ElemConstraints;
+      }
+
+      public int[] getDilationalStiffness3ElementNodeOffsets() {
+         return myDilationalStiffness3ElemNodeOffsets;
+      }
+
+      public int[] getDilationalStiffness3ElementNodeDims() {
+         return myDilationalStiffness3NodeDims;
+      }
+
+      public double[] getDilationalStiffness3ElementNodeTransforms() {
+         return myDilationalStiffness3NodeTransforms;
       }
 
       public int[] getDilationalStiffness3ElementNodeCounts() {

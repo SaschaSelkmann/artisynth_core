@@ -626,11 +626,13 @@ public class KKTSolver {
          M, sizeM, GT, Rg, NT, Rn, mSlots, mVals, numMVals,
          null, null, 0, null, null, null, 0,
          null, null, null, null, null, null, 0,
-         null, null, null, null, null, null, null, null, null, null, 0,
+         null, null, null, null, null, null, null, null, null, null, null,
+         null, null, 0,
          null, null, null, null, null, null, null, null, null, 0,
          null, null, null, null, null, null, null, null, null, null, null,
          null, null, 0,
-         null, null, null, null, null, null, null, null, null, 0);
+         null, null, null, null, null, null, null, null, null, null, null,
+         null, 0);
    }
 
    public boolean factorDeviceMContributions (
@@ -642,9 +644,11 @@ public class KKTSolver {
       int numBlock3Vals,
       int[] mat3Slots, double[] mat3Gis, double[] mat3Gjs, double[] mat3Ds,
       double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals,
-      int[] matElem3NodeCounts, int[] matElem3PairOffsets,
+      int[] matElem3NodeCounts, int[] matElem3NodeOffsets,
+      int[] matElem3PairOffsets,
       int[] matElem3IpOffsets, int[] matElem3GradOffsets,
       int[] matElem3PairNodeIdxs, int[] matElem3BlockSlots,
+      int[] matElem3NodeDims, double[] matElem3NodeTransforms,
       double[] matElem3Grads, double[] matElem3Ds,
       double[] matElem3Sigmas, double[] matElem3Dvs,
       int numMatElem3Vals,
@@ -660,10 +664,12 @@ public class KKTSolver {
       double[] linGeom3NodeTransforms, double[] linGeom3Params,
       double[] linGeom3NodePositions, double[] linGeom3NaturalGrads,
       double[] linGeom3IpWeights, int numLinGeom3Vals,
-      int[] dilElem3NodeCounts, int[] dilElem3PressureCounts,
+      int[] dilElem3NodeCounts, int[] dilElem3NodeOffsets,
+      int[] dilElem3PressureCounts,
       int[] dilElem3PairOffsets, int[] dilElem3ConstraintOffsets,
       int[] dilElem3RinvOffsets, int[] dilElem3PairNodeIdxs,
-      int[] dilElem3BlockSlots, double[] dilElem3Constraints,
+      int[] dilElem3BlockSlots, int[] dilElem3NodeDims,
+      double[] dilElem3NodeTransforms, double[] dilElem3Constraints,
       double[] dilElem3Rinvs, int numDilElem3Vals) {
 
       if (!canFactorDeviceMContributions()) {
@@ -677,8 +683,10 @@ public class KKTSolver {
          block3Slots, block3Vals, block3Scales, numBlock3Vals,
          mat3Slots, mat3Gis, mat3Gjs, mat3Ds, mat3Sigmas, mat3Dvs,
          numMat3Vals,
-         matElem3NodeCounts, matElem3PairOffsets, matElem3IpOffsets,
+         matElem3NodeCounts, matElem3NodeOffsets, matElem3PairOffsets,
+         matElem3IpOffsets,
          matElem3GradOffsets, matElem3PairNodeIdxs, matElem3BlockSlots,
+         matElem3NodeDims, matElem3NodeTransforms,
          matElem3Grads, matElem3Ds, matElem3Sigmas, matElem3Dvs,
          numMatElem3Vals,
          linElem3NodeCounts, linElem3PairOffsets, linElem3IpOffsets,
@@ -690,9 +698,11 @@ public class KKTSolver {
          linGeom3NodeTransforms, linGeom3Params,
          linGeom3NodePositions, linGeom3NaturalGrads, linGeom3IpWeights,
          numLinGeom3Vals,
-         dilElem3NodeCounts, dilElem3PressureCounts, dilElem3PairOffsets,
+         dilElem3NodeCounts, dilElem3NodeOffsets, dilElem3PressureCounts,
+         dilElem3PairOffsets,
          dilElem3ConstraintOffsets, dilElem3RinvOffsets,
-         dilElem3PairNodeIdxs, dilElem3BlockSlots, dilElem3Constraints,
+         dilElem3PairNodeIdxs, dilElem3BlockSlots, dilElem3NodeDims,
+         dilElem3NodeTransforms, dilElem3Constraints,
          dilElem3Rinvs, numDilElem3Vals);
 
       if (NT != null && NT.colSize() != 0) {
@@ -1991,9 +2001,11 @@ public class KKTSolver {
       int numBlock3Vals,
       int[] mat3Slots, double[] mat3Gis, double[] mat3Gjs, double[] mat3Ds,
       double[] mat3Sigmas, double[] mat3Dvs, int numMat3Vals,
-      int[] matElem3NodeCounts, int[] matElem3PairOffsets,
+      int[] matElem3NodeCounts, int[] matElem3NodeOffsets,
+      int[] matElem3PairOffsets,
       int[] matElem3IpOffsets, int[] matElem3GradOffsets,
       int[] matElem3PairNodeIdxs, int[] matElem3BlockSlots,
+      int[] matElem3NodeDims, double[] matElem3NodeTransforms,
       double[] matElem3Grads, double[] matElem3Ds,
       double[] matElem3Sigmas, double[] matElem3Dvs,
       int numMatElem3Vals,
@@ -2009,10 +2021,12 @@ public class KKTSolver {
       double[] linGeom3NodeTransforms, double[] linGeom3Params,
       double[] linGeom3NodePositions, double[] linGeom3NaturalGrads,
       double[] linGeom3IpWeights, int numLinGeom3Vals,
-      int[] dilElem3NodeCounts, int[] dilElem3PressureCounts,
+      int[] dilElem3NodeCounts, int[] dilElem3NodeOffsets,
+      int[] dilElem3PressureCounts,
       int[] dilElem3PairOffsets, int[] dilElem3ConstraintOffsets,
       int[] dilElem3RinvOffsets, int[] dilElem3PairNodeIdxs,
-      int[] dilElem3BlockSlots, double[] dilElem3Constraints,
+      int[] dilElem3BlockSlots, int[] dilElem3NodeDims,
+      double[] dilElem3NodeTransforms, double[] dilElem3Constraints,
       double[] dilElem3Rinvs, int numDilElem3Vals) {
 
       if (myCuDss == null) {
@@ -2039,8 +2053,10 @@ public class KKTSolver {
       }
       if (numMatElem3Vals > 0) {
          myCuDss.addMaterialStiffness3ElementDeviceValues (
-            matElem3NodeCounts, matElem3PairOffsets, matElem3IpOffsets,
+            matElem3NodeCounts, matElem3NodeOffsets, matElem3PairOffsets,
+            matElem3IpOffsets,
             matElem3GradOffsets, matElem3PairNodeIdxs, matElem3BlockSlots,
+            matElem3NodeDims, matElem3NodeTransforms,
             matElem3Grads, matElem3Ds, matElem3Sigmas, matElem3Dvs,
             numMatElem3Vals, 1.0);
       }
@@ -2062,9 +2078,11 @@ public class KKTSolver {
       }
       if (numDilElem3Vals > 0) {
          myCuDss.addDilationalStiffness3ElementDeviceValues (
-            dilElem3NodeCounts, dilElem3PressureCounts, dilElem3PairOffsets,
+            dilElem3NodeCounts, dilElem3NodeOffsets, dilElem3PressureCounts,
+            dilElem3PairOffsets,
             dilElem3ConstraintOffsets, dilElem3RinvOffsets,
-            dilElem3PairNodeIdxs, dilElem3BlockSlots, dilElem3Constraints,
+            dilElem3PairNodeIdxs, dilElem3BlockSlots, dilElem3NodeDims,
+            dilElem3NodeTransforms, dilElem3Constraints,
             dilElem3Rinvs, numDilElem3Vals, 1.0);
       }
       myCuDss.factorDeviceValues();

@@ -516,6 +516,7 @@ public class CuDssSolverTest extends UnitTest {
          s.analyze (zeroVals, cols, rows, 3, Matrix.SPD);
 
          int[] elemNodeCounts = { 3 };
+         int[] elemNodeOffsets = { 0, 3 };
          int[] elemPairOffsets = { 0, 3 };
          int[] elemIpOffsets = { 0, 1 };
          int[] elemGradOffsets = { 0, 3 };
@@ -524,11 +525,20 @@ public class CuDssSolverTest extends UnitTest {
             1, 1,
             2, 2
          };
-         int[] blockSlots = {
-             0, -1, -1,  -1, -1, -1,  -1, -1, -1,
-            -1, -1, -1,  -1,  1, -1,  -1, -1, -1,
-            -1, -1, -1,  -1, -1, -1,  -1, -1,  2
-         };
+         // 36-slot stride per pair (row-major rowDim x colDim of the target
+         // block); free nodes have dim 3 so only the leading 3x3 is used
+         int[] blockSlots = new int[36*3];
+         java.util.Arrays.fill (blockSlots, -1);
+         blockSlots[0] = 0;        // pair 0: K(0,0)
+         blockSlots[36 + 4] = 1;   // pair 1: K(1,1)
+         blockSlots[72 + 8] = 2;   // pair 2: K(2,2)
+         int[] nodeDims = { 3, 3, 3 };
+         double[] nodeTransforms = new double[18*3];
+         for (int i=0; i<3; i++) {
+            nodeTransforms[18*i] = 1;     // identity T for free nodes
+            nodeTransforms[18*i+4] = 1;
+            nodeTransforms[18*i+8] = 1;
+         }
          double[] grads = {
             1, 0, 0,
             0, 1, 0,
@@ -543,8 +553,9 @@ public class CuDssSolverTest extends UnitTest {
 
          s.clearDeviceValues();
          s.addMaterialStiffness3ElementDeviceValues (
-            elemNodeCounts, elemPairOffsets, elemIpOffsets, elemGradOffsets,
-            pairNodeIdxs, blockSlots, grads, Ds, sigmas, dvs, 1, 1.0);
+            elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
+            elemGradOffsets, pairNodeIdxs, blockSlots, nodeDims,
+            nodeTransforms, grads, Ds, sigmas, dvs, 1, 1.0);
          s.factorDeviceValues();
 
          double[] x = new double[3];
@@ -570,6 +581,7 @@ public class CuDssSolverTest extends UnitTest {
          s.analyze (zeroVals, cols, rows, 3, Matrix.SPD);
 
          int[] elemNodeCounts = { 3 };
+         int[] elemNodeOffsets = { 0, 3 };
          int[] elemPressureCounts = { 3 };
          int[] elemPairOffsets = { 0, 3 };
          int[] elemConstraintOffsets = { 0, 9 };
@@ -579,11 +591,20 @@ public class CuDssSolverTest extends UnitTest {
             1, 1,
             2, 2
          };
-         int[] blockSlots = {
-             0, -1, -1,  -1, -1, -1,  -1, -1, -1,
-            -1, -1, -1,  -1,  1, -1,  -1, -1, -1,
-            -1, -1, -1,  -1, -1, -1,  -1, -1,  2
-         };
+         // 36-slot stride per pair (row-major rowDim x colDim of the target
+         // block); free nodes have dim 3 so only the leading 3x3 is used
+         int[] blockSlots = new int[36*3];
+         java.util.Arrays.fill (blockSlots, -1);
+         blockSlots[0] = 0;        // pair 0: K(0,0)
+         blockSlots[36 + 4] = 1;   // pair 1: K(1,1)
+         blockSlots[72 + 8] = 2;   // pair 2: K(2,2)
+         int[] nodeDims = { 3, 3, 3 };
+         double[] nodeTransforms = new double[18*3];
+         for (int i=0; i<3; i++) {
+            nodeTransforms[18*i] = 1;     // identity T for free nodes
+            nodeTransforms[18*i+4] = 1;
+            nodeTransforms[18*i+8] = 1;
+         }
          double[] constraints = {
             1, 0, 0,  0, 0, 0,  0, 0, 0,
             0, 0, 0,  0, 1, 0,  0, 0, 0,
@@ -597,9 +618,10 @@ public class CuDssSolverTest extends UnitTest {
 
          s.clearDeviceValues();
          s.addDilationalStiffness3ElementDeviceValues (
-            elemNodeCounts, elemPressureCounts, elemPairOffsets,
+            elemNodeCounts, elemNodeOffsets, elemPressureCounts,
+            elemPairOffsets,
             elemConstraintOffsets, elemRinvOffsets, pairNodeIdxs, blockSlots,
-            constraints, rinvs, 1, 1.0);
+            nodeDims, nodeTransforms, constraints, rinvs, 1, 1.0);
          s.factorDeviceValues();
 
          double[] x = new double[3];

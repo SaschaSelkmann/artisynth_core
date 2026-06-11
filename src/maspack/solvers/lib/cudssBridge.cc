@@ -45,11 +45,13 @@ extern "C" void addMaterialStiffness3_launch (
    const double* dvs, double globalScale, double* crsVals,
    cudaStream_t stream);
 extern "C" void addMaterialStiffness3Element_launch (
-   int nelems, const int* elemNodeCounts, const int* elemPairOffsets,
-   const int* elemIpOffsets, const int* elemGradOffsets,
-   const int* pairNodeIdxs, const int* blockSlots, const double* grads,
-   const double* Ds, const double* sigmas, const double* dvs,
-   double globalScale, double* crsVals, cudaStream_t stream);
+   int nelems, const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPairOffsets, const int* elemIpOffsets,
+   const int* elemGradOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const int* nodeDims, const double* nodeTransforms,
+   const double* grads, const double* Ds, const double* sigmas,
+   const double* dvs, double globalScale, double* crsVals,
+   cudaStream_t stream);
 extern "C" void addLinearElasticStiffness3Element_launch (
    int nelems, const int* elemNodeCounts, const int* elemPairOffsets,
    const int* elemIpOffsets, const int* elemGradOffsets,
@@ -66,12 +68,13 @@ extern "C" void addLinearElasticStiffness3ElementGeometry_launch (
    const double* ipWeights, double globalScale, double* crsVals,
    cudaStream_t stream);
 extern "C" void addDilationalStiffness3Element_launch (
-   int nelems,
-   const int* elemNodeCounts, const int* elemPressureCounts,
-   const int* elemPairOffsets, const int* elemConstraintOffsets,
-   const int* elemRinvOffsets, const int* pairNodeIdxs,
-   const int* blockSlots, const double* constraints, const double* rinvs,
-   double globalScale, double* crsVals, cudaStream_t stream);
+   int nelems, const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPressureCounts, const int* elemPairOffsets,
+   const int* elemConstraintOffsets, const int* elemRinvOffsets,
+   const int* pairNodeIdxs, const int* blockSlots, const int* nodeDims,
+   const double* nodeTransforms, const double* constraints,
+   const double* rinvs, double globalScale, double* crsVals,
+   cudaStream_t stream);
 
 void CuDssBridge::setTimingEnabled (bool on) {
    g_timing = on;
@@ -735,9 +738,11 @@ int CuDssBridge::addMaterialStiffness3DeviceValues (
 }
 
 int CuDssBridge::addMaterialStiffness3ElementDeviceValues (
-   const int* elemNodeCounts, const int* elemPairOffsets,
-   const int* elemIpOffsets, const int* elemGradOffsets,
-   const int* pairNodeIdxs, const int* blockSlots, const double* grads,
+   const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPairOffsets, const int* elemIpOffsets,
+   const int* elemGradOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const int* nodeDims,
+   const double* nodeTransforms, const double* grads,
    const double* Ds, const double* sigmas, const double* dvs,
    int nelems, double scale) {
 
@@ -756,39 +761,50 @@ int CuDssBridge::addMaterialStiffness3ElementDeviceValues (
       return CUDSS_BRIDGE_OK;
    }
 
+   int nnodes = elemNodeOffsets[nelems];
    int npairs = elemPairOffsets[nelems];
    int nips = elemIpOffsets[nelems];
    int ngrads = elemGradOffsets[nelems];
-   int *elemNodeCountsD = nullptr, *elemPairOffsetsD = nullptr;
+   int *elemNodeCountsD = nullptr, *elemNodeOffsetsD = nullptr;
+   int *elemPairOffsetsD = nullptr;
    int *elemIpOffsetsD = nullptr, *elemGradOffsetsD = nullptr;
-   int *pairNodeIdxsD = nullptr, *blockSlotsD = nullptr;
+   int *pairNodeIdxsD = nullptr, *blockSlotsD = nullptr, *nodeDimsD = nullptr;
+   double *nodeTransformsD = nullptr;
    double *gradsD = nullptr, *DsD = nullptr, *sigmasD = nullptr, *dvsD = nullptr;
 
    const size_t elemBytes = (size_t)nelems * sizeof(int);
    const size_t elemOffBytes = (size_t)(nelems + 1) * sizeof(int);
    const size_t pairIdxBytes = (size_t)npairs * 2 * sizeof(int);
-   const size_t slotBytes = (size_t)npairs * 9 * sizeof(int);
+   const size_t slotBytes = (size_t)npairs * 36 * sizeof(int);
+   const size_t nodeDimBytes = (size_t)nnodes * sizeof(int);
+   const size_t nodeXformBytes = (size_t)nnodes * 18 * sizeof(double);
    const size_t gradBytes = (size_t)ngrads * 3 * sizeof(double);
    const size_t dBytes = (size_t)nips * 36 * sizeof(double);
    const size_t sigmaBytes = (size_t)nips * 6 * sizeof(double);
    const size_t dvBytes = (size_t)nips * sizeof(double);
 
    if (!cudaOk (cudaMalloc (&elemNodeCountsD, elemBytes)) ||
+       !cudaOk (cudaMalloc (&elemNodeOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&elemPairOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&elemIpOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&elemGradOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&pairNodeIdxsD, pairIdxBytes)) ||
        !cudaOk (cudaMalloc (&blockSlotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&nodeDimsD, nodeDimBytes)) ||
+       !cudaOk (cudaMalloc (&nodeTransformsD, nodeXformBytes)) ||
        !cudaOk (cudaMalloc (&gradsD, gradBytes)) ||
        !cudaOk (cudaMalloc (&DsD, dBytes)) ||
        !cudaOk (cudaMalloc (&sigmasD, sigmaBytes)) ||
        !cudaOk (cudaMalloc (&dvsD, dvBytes))) {
       if (elemNodeCountsD) cudaFree (elemNodeCountsD);
+      if (elemNodeOffsetsD) cudaFree (elemNodeOffsetsD);
       if (elemPairOffsetsD) cudaFree (elemPairOffsetsD);
       if (elemIpOffsetsD) cudaFree (elemIpOffsetsD);
       if (elemGradOffsetsD) cudaFree (elemGradOffsetsD);
       if (pairNodeIdxsD) cudaFree (pairNodeIdxsD);
       if (blockSlotsD) cudaFree (blockSlotsD);
+      if (nodeDimsD) cudaFree (nodeDimsD);
+      if (nodeTransformsD) cudaFree (nodeTransformsD);
       if (gradsD) cudaFree (gradsD);
       if (DsD) cudaFree (DsD);
       if (sigmasD) cudaFree (sigmasD);
@@ -800,6 +816,9 @@ int CuDssBridge::addMaterialStiffness3ElementDeviceValues (
 
    if (!cudaOk (cudaMemcpyAsync (
           elemNodeCountsD, elemNodeCounts, elemBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemNodeOffsetsD, elemNodeOffsets, elemOffBytes,
           cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
           elemPairOffsetsD, elemPairOffsets, elemOffBytes,
@@ -817,6 +836,12 @@ int CuDssBridge::addMaterialStiffness3ElementDeviceValues (
           blockSlotsD, blockSlots, slotBytes,
           cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
+          nodeDimsD, nodeDims, nodeDimBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          nodeTransformsD, nodeTransforms, nodeXformBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
           gradsD, grads, gradBytes, cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
           DsD, Ds, dBytes, cudaMemcpyHostToDevice, myStream)) ||
@@ -825,11 +850,14 @@ int CuDssBridge::addMaterialStiffness3ElementDeviceValues (
        !cudaOk (cudaMemcpyAsync (
           dvsD, dvs, dvBytes, cudaMemcpyHostToDevice, myStream))) {
       cudaFree (elemNodeCountsD);
+      cudaFree (elemNodeOffsetsD);
       cudaFree (elemPairOffsetsD);
       cudaFree (elemIpOffsetsD);
       cudaFree (elemGradOffsetsD);
       cudaFree (pairNodeIdxsD);
       cudaFree (blockSlotsD);
+      cudaFree (nodeDimsD);
+      cudaFree (nodeTransformsD);
       cudaFree (gradsD);
       cudaFree (DsD);
       cudaFree (sigmasD);
@@ -839,16 +867,20 @@ int CuDssBridge::addMaterialStiffness3ElementDeviceValues (
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    addMaterialStiffness3Element_launch (
-      nelems, elemNodeCountsD, elemPairOffsetsD, elemIpOffsetsD,
-      elemGradOffsetsD, pairNodeIdxsD, blockSlotsD, gradsD, DsD, sigmasD,
+      nelems, elemNodeCountsD, elemNodeOffsetsD, elemPairOffsetsD,
+      elemIpOffsetsD, elemGradOffsetsD, pairNodeIdxsD, blockSlotsD,
+      nodeDimsD, nodeTransformsD, gradsD, DsD, sigmasD,
       dvsD, scale, myValsD, myStream);
    cudaError_t launchErr = cudaGetLastError();
    cudaFree (elemNodeCountsD);
+   cudaFree (elemNodeOffsetsD);
    cudaFree (elemPairOffsetsD);
    cudaFree (elemIpOffsetsD);
    cudaFree (elemGradOffsetsD);
    cudaFree (pairNodeIdxsD);
    cudaFree (blockSlotsD);
+   cudaFree (nodeDimsD);
+   cudaFree (nodeTransformsD);
    cudaFree (gradsD);
    cudaFree (DsD);
    cudaFree (sigmasD);
@@ -1149,11 +1181,13 @@ int CuDssBridge::addLinearElasticStiffness3ElementGeometryDeviceValues (
 }
 
 int CuDssBridge::addDilationalStiffness3ElementDeviceValues (
-   const int* elemNodeCounts, const int* elemPressureCounts,
+   const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPressureCounts,
    const int* elemPairOffsets, const int* elemConstraintOffsets,
    const int* elemRinvOffsets, const int* pairNodeIdxs,
-   const int* blockSlots, const double* constraints, const double* rinvs,
-   int nelems, double scale) {
+   const int* blockSlots, const int* nodeDims,
+   const double* nodeTransforms, const double* constraints,
+   const double* rinvs, int nelems, double scale) {
 
    if (!myHasPattern || !myValsD) {
       myLastErr =
@@ -1173,40 +1207,52 @@ int CuDssBridge::addDilationalStiffness3ElementDeviceValues (
    int npairs = elemPairOffsets[nelems];
    int nconstraints = elemConstraintOffsets[nelems];
    int nrinv = elemRinvOffsets[nelems];
+   int nnodes = elemNodeOffsets[nelems];
    if (npairs == 0 || nconstraints == 0 || nrinv == 0) {
       myLastErr = nullptr;
       return CUDSS_BRIDGE_OK;
    }
 
-   int *elemNodeCountsD = nullptr, *elemPressureCountsD = nullptr;
+   int *elemNodeCountsD = nullptr, *elemNodeOffsetsD = nullptr;
+   int *elemPressureCountsD = nullptr;
    int *elemPairOffsetsD = nullptr, *elemConstraintOffsetsD = nullptr;
    int *elemRinvOffsetsD = nullptr;
    int *pairNodeIdxsD = nullptr, *blockSlotsD = nullptr;
+   int *nodeDimsD = nullptr;
+   double *nodeTransformsD = nullptr;
    double *constraintsD = nullptr, *rinvsD = nullptr;
 
    const size_t elemBytes = (size_t)nelems * sizeof(int);
    const size_t elemOffBytes = (size_t)(nelems + 1) * sizeof(int);
    const size_t pairIdxBytes = (size_t)npairs * 2 * sizeof(int);
-   const size_t slotBytes = (size_t)npairs * 9 * sizeof(int);
+   const size_t slotBytes = (size_t)npairs * 36 * sizeof(int);
+   const size_t nodeDimBytes = (size_t)nnodes * sizeof(int);
+   const size_t nodeXformBytes = (size_t)nnodes * 18 * sizeof(double);
    const size_t constraintBytes = (size_t)nconstraints * 3 * sizeof(double);
    const size_t rinvBytes = (size_t)nrinv * sizeof(double);
 
    if (!cudaOk (cudaMalloc (&elemNodeCountsD, elemBytes)) ||
+       !cudaOk (cudaMalloc (&elemNodeOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&elemPressureCountsD, elemBytes)) ||
        !cudaOk (cudaMalloc (&elemPairOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&elemConstraintOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&elemRinvOffsetsD, elemOffBytes)) ||
        !cudaOk (cudaMalloc (&pairNodeIdxsD, pairIdxBytes)) ||
        !cudaOk (cudaMalloc (&blockSlotsD, slotBytes)) ||
+       !cudaOk (cudaMalloc (&nodeDimsD, nodeDimBytes)) ||
+       !cudaOk (cudaMalloc (&nodeTransformsD, nodeXformBytes)) ||
        !cudaOk (cudaMalloc (&constraintsD, constraintBytes)) ||
        !cudaOk (cudaMalloc (&rinvsD, rinvBytes))) {
       if (elemNodeCountsD) cudaFree (elemNodeCountsD);
+      if (elemNodeOffsetsD) cudaFree (elemNodeOffsetsD);
       if (elemPressureCountsD) cudaFree (elemPressureCountsD);
       if (elemPairOffsetsD) cudaFree (elemPairOffsetsD);
       if (elemConstraintOffsetsD) cudaFree (elemConstraintOffsetsD);
       if (elemRinvOffsetsD) cudaFree (elemRinvOffsetsD);
       if (pairNodeIdxsD) cudaFree (pairNodeIdxsD);
       if (blockSlotsD) cudaFree (blockSlotsD);
+      if (nodeDimsD) cudaFree (nodeDimsD);
+      if (nodeTransformsD) cudaFree (nodeTransformsD);
       if (constraintsD) cudaFree (constraintsD);
       if (rinvsD) cudaFree (rinvsD);
       myLastErr =
@@ -1216,6 +1262,9 @@ int CuDssBridge::addDilationalStiffness3ElementDeviceValues (
 
    if (!cudaOk (cudaMemcpyAsync (
           elemNodeCountsD, elemNodeCounts, elemBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          elemNodeOffsetsD, elemNodeOffsets, elemOffBytes,
           cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
           elemPressureCountsD, elemPressureCounts, elemBytes,
@@ -1236,17 +1285,26 @@ int CuDssBridge::addDilationalStiffness3ElementDeviceValues (
           blockSlotsD, blockSlots, slotBytes,
           cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
+          nodeDimsD, nodeDims, nodeDimBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
+          nodeTransformsD, nodeTransforms, nodeXformBytes,
+          cudaMemcpyHostToDevice, myStream)) ||
+       !cudaOk (cudaMemcpyAsync (
           constraintsD, constraints, constraintBytes,
           cudaMemcpyHostToDevice, myStream)) ||
        !cudaOk (cudaMemcpyAsync (
           rinvsD, rinvs, rinvBytes, cudaMemcpyHostToDevice, myStream))) {
       cudaFree (elemNodeCountsD);
+      cudaFree (elemNodeOffsetsD);
       cudaFree (elemPressureCountsD);
       cudaFree (elemPairOffsetsD);
       cudaFree (elemConstraintOffsetsD);
       cudaFree (elemRinvOffsetsD);
       cudaFree (pairNodeIdxsD);
       cudaFree (blockSlotsD);
+      cudaFree (nodeDimsD);
+      cudaFree (nodeTransformsD);
       cudaFree (constraintsD);
       cudaFree (rinvsD);
       myLastErr =
@@ -1254,17 +1312,21 @@ int CuDssBridge::addDilationalStiffness3ElementDeviceValues (
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    addDilationalStiffness3Element_launch (
-      nelems, elemNodeCountsD, elemPressureCountsD, elemPairOffsetsD,
-      elemConstraintOffsetsD, elemRinvOffsetsD, pairNodeIdxsD, blockSlotsD,
+      nelems, elemNodeCountsD, elemNodeOffsetsD, elemPressureCountsD,
+      elemPairOffsetsD, elemConstraintOffsetsD, elemRinvOffsetsD,
+      pairNodeIdxsD, blockSlotsD, nodeDimsD, nodeTransformsD,
       constraintsD, rinvsD, scale, myValsD, myStream);
    cudaError_t launchErr = cudaGetLastError();
    cudaFree (elemNodeCountsD);
+   cudaFree (elemNodeOffsetsD);
    cudaFree (elemPressureCountsD);
    cudaFree (elemPairOffsetsD);
    cudaFree (elemConstraintOffsetsD);
    cudaFree (elemRinvOffsetsD);
    cudaFree (pairNodeIdxsD);
    cudaFree (blockSlotsD);
+   cudaFree (nodeDimsD);
+   cudaFree (nodeTransformsD);
    cudaFree (constraintsD);
    cudaFree (rinvsD);
    if (!cudaOk (launchErr)) {

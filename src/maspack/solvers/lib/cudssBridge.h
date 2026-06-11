@@ -98,9 +98,11 @@ public:
       const double* Ds, const double* sigmas, const double* dvs,
       int nblocks, double scale);
    int addMaterialStiffness3ElementDeviceValues (
-      const int* elemNodeCounts, const int* elemPairOffsets,
-      const int* elemIpOffsets, const int* elemGradOffsets,
-      const int* pairNodeIdxs, const int* blockSlots, const double* grads,
+      const int* elemNodeCounts, const int* elemNodeOffsets,
+      const int* elemPairOffsets, const int* elemIpOffsets,
+      const int* elemGradOffsets, const int* pairNodeIdxs,
+      const int* blockSlots, const int* nodeDims,
+      const double* nodeTransforms, const double* grads,
       const double* Ds, const double* sigmas, const double* dvs,
       int nelems, double scale);
    int addLinearElasticStiffness3ElementDeviceValues (
@@ -118,11 +120,13 @@ public:
       const double* elemNodePositions, const double* naturalGrads,
       const double* ipWeights, int nelems, double scale);
    int addDilationalStiffness3ElementDeviceValues (
-      const int* elemNodeCounts, const int* elemPressureCounts,
+      const int* elemNodeCounts, const int* elemNodeOffsets,
+      const int* elemPressureCounts,
       const int* elemPairOffsets, const int* elemConstraintOffsets,
       const int* elemRinvOffsets, const int* pairNodeIdxs,
-      const int* blockSlots, const double* constraints, const double* rinvs,
-      int nelems, double scale);
+      const int* blockSlots, const int* nodeDims,
+      const double* nodeTransforms, const double* constraints,
+      const double* rinvs, int nelems, double scale);
    int factorDeviceValues();
 
    // Copy the current device-side CSR values buffer back to host (length nnz).

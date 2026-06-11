@@ -1039,6 +1039,101 @@ public class FemModel3dTest extends UnitTest {
          " (ref="+ref+")");
    }
 
+   // Cross-validates the master-slave (T_i K T_j^T) reduction in the NONLINEAR
+   // material3 (and, for incompressible materials, dilational) GPU element
+   // kernels: a nonlinear FEM beam whose x-max face nodes are attached to an
+   // ACTIVE rigid body (PointFrameAttachment -> 6x3 H transforms at scatter
+   // time), stepped multi-step from a seeded bending velocity under gravity
+   // with ConstrainedBackwardEuler, cuDSS vs Pardiso via the SOLVE. The cuDSS
+   // run asserts kktDeviceMContributions so a silent host fallback cannot
+   // make the comparison vacuous.
+   private double[] runNonlinearAttachedBodyStep (
+      maspack.solvers.SparseSolverId solverId, String matName) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      fem.setMaterial (createNonlinearTestMaterial (matName));
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+         else {
+            // seed a bending velocity field so the velocity-coupled terms
+            // are exercised from step one
+            double x = node.getRestPosition().x + 0.5;
+            node.setVelocity (new Vector3d (0, 0, -0.5*x));
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      // ACTIVE rigid body just past the free end; attaching the x-max face
+      // nodes makes them non-active slaves, so their element stiffness must
+      // be reduced onto the body's 6-DOF frame at device scatter time
+      RigidBody body = RigidBody.createBox ("body", 0.1, 0.45, 0.45, 1000);
+      body.setPose (new RigidTransform3d (0.55, 0, 0));
+      body.setFrameDamping (5.0);
+      body.setRotaryDamping (1.0);
+      mech.addRigidBody (body);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x >= 0.5 - 1e-6) {
+            mech.attachPoint (node, body);
+         }
+      }
+
+      double h = 0.005;
+      for (int i=0; i<10; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      if (solverId == maspack.solvers.SparseSolverId.CuDss) {
+         String status =
+            mech.getSolver().getLastKktFactorDirectCrsStatus();
+         if (!"kktDeviceMContributions".equals (status)) {
+            throw new TestException (
+               "nonlinear attached-body ("+matName+") did not engage the "+
+               "device assembly path: status="+status);
+         }
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testNonlinearAttachedBodyEquivalence (String matName) {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu =
+         runNonlinearAttachedBodyStep (
+            maspack.solvers.SparseSolverId.CuDss, matName);
+      double[] cpu =
+         runNonlinearAttachedBodyStep (
+            maspack.solvers.SparseSolverId.Pardiso, matName);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (ref < 1e-3) {
+         throw new TestException (
+            "nonlinear attached-body ("+matName+") barely moved (ref="+ref+
+            "); reduced kernels not meaningfully exercised");
+      }
+      if (max > tol) {
+         throw new TestException (
+            "nonlinear attached-body ("+matName+") cuDSS vs Pardiso velocity "+
+            "mismatch: max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "nonlinear attached-body ("+matName+") cuDSS equivalence ok: max="+
+         max+" (ref="+ref+")");
+   }
+
    // Validates the device FEM internal-force SpMV (task 16 building block): the
    // internal elastic force is K*u (K = the device-assembled position Jacobian,
    // u = displacement from rest). Builds a pure non-corotated FEM beam (x-min
@@ -2167,6 +2262,8 @@ public class FemModel3dTest extends UnitTest {
       testNonlinearMaterialEquivalence ("neohookean");
       testNonlinearMaterialEquivalence ("mooneyRivlin");
       testNonlinearMaterialEquivalence ("stVenantKirchoff");
+      testNonlinearAttachedBodyEquivalence ("neohookean");
+      testNonlinearAttachedBodyEquivalence ("mooneyRivlin");
       testWrapAttachEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();

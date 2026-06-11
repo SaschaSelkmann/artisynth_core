@@ -203,15 +203,19 @@ Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3DeviceValues
 JNIEXPORT jint JNICALL
 Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3ElementDeviceValues
   (JNIEnv* env, jclass /*cls*/, jlong handle,
-   jintArray elemNodeCounts, jintArray elemPairOffsets,
+   jintArray elemNodeCounts, jintArray elemNodeOffsets,
+   jintArray elemPairOffsets,
    jintArray elemIpOffsets, jintArray elemGradOffsets,
-   jintArray pairNodeIdxs, jintArray blockSlots, jdoubleArray grads,
+   jintArray pairNodeIdxs, jintArray blockSlots,
+   jintArray nodeDims, jdoubleArray nodeTransforms, jdoubleArray grads,
    jdoubleArray Ds, jdoubleArray sigmas, jdoubleArray dvs,
    jint nelems, jdouble scale) {
    CuDssBridge* b = asBridge (handle);
    if (!b) return CUDSS_BRIDGE_ERR_STATE;
    jint* elemNodeCountsP =
       env->GetIntArrayElements (elemNodeCounts, nullptr);
+   jint* elemNodeOffsetsP =
+      env->GetIntArrayElements (elemNodeOffsets, nullptr);
    jint* elemPairOffsetsP =
       env->GetIntArrayElements (elemPairOffsets, nullptr);
    jint* elemIpOffsetsP =
@@ -220,16 +224,25 @@ Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3ElementDeviceValues
       env->GetIntArrayElements (elemGradOffsets, nullptr);
    jint* pairNodeIdxsP = env->GetIntArrayElements (pairNodeIdxs, nullptr);
    jint* blockSlotsP = env->GetIntArrayElements (blockSlots, nullptr);
+   jint* nodeDimsP = env->GetIntArrayElements (nodeDims, nullptr);
+   jdouble* nodeTransformsP =
+      env->GetDoubleArrayElements (nodeTransforms, nullptr);
    jdouble* gradsP = env->GetDoubleArrayElements (grads, nullptr);
    jdouble* DsP = env->GetDoubleArrayElements (Ds, nullptr);
    jdouble* sigmasP = env->GetDoubleArrayElements (sigmas, nullptr);
    jdouble* dvsP = env->GetDoubleArrayElements (dvs, nullptr);
-   if (!elemNodeCountsP || !elemPairOffsetsP || !elemIpOffsetsP ||
-       !elemGradOffsetsP || !pairNodeIdxsP || !blockSlotsP || !gradsP ||
+   if (!elemNodeCountsP || !elemNodeOffsetsP || !elemPairOffsetsP ||
+       !elemIpOffsetsP ||
+       !elemGradOffsetsP || !pairNodeIdxsP || !blockSlotsP ||
+       !nodeDimsP || !nodeTransformsP || !gradsP ||
        !DsP || !sigmasP || !dvsP) {
       if (elemNodeCountsP) {
          env->ReleaseIntArrayElements (
             elemNodeCounts, elemNodeCountsP, JNI_ABORT);
+      }
+      if (elemNodeOffsetsP) {
+         env->ReleaseIntArrayElements (
+            elemNodeOffsets, elemNodeOffsetsP, JNI_ABORT);
       }
       if (elemPairOffsetsP) {
          env->ReleaseIntArrayElements (
@@ -250,6 +263,13 @@ Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3ElementDeviceValues
       if (blockSlotsP) {
          env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
       }
+      if (nodeDimsP) {
+         env->ReleaseIntArrayElements (nodeDims, nodeDimsP, JNI_ABORT);
+      }
+      if (nodeTransformsP) {
+         env->ReleaseDoubleArrayElements (
+            nodeTransforms, nodeTransformsP, JNI_ABORT);
+      }
       if (gradsP) env->ReleaseDoubleArrayElements (grads, gradsP, JNI_ABORT);
       if (DsP) env->ReleaseDoubleArrayElements (Ds, DsP, JNI_ABORT);
       if (sigmasP) {
@@ -259,14 +279,18 @@ Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3ElementDeviceValues
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    int status = b->addMaterialStiffness3ElementDeviceValues (
-      (const int*)elemNodeCountsP, (const int*)elemPairOffsetsP,
+      (const int*)elemNodeCountsP, (const int*)elemNodeOffsetsP,
+      (const int*)elemPairOffsetsP,
       (const int*)elemIpOffsetsP, (const int*)elemGradOffsetsP,
       (const int*)pairNodeIdxsP, (const int*)blockSlotsP,
+      (const int*)nodeDimsP, (const double*)nodeTransformsP,
       (const double*)gradsP, (const double*)DsP,
       (const double*)sigmasP, (const double*)dvsP,
       (int)nelems, (double)scale);
    env->ReleaseIntArrayElements (
       elemNodeCounts, elemNodeCountsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (
+      elemNodeOffsets, elemNodeOffsetsP, JNI_ABORT);
    env->ReleaseIntArrayElements (
       elemPairOffsets, elemPairOffsetsP, JNI_ABORT);
    env->ReleaseIntArrayElements (
@@ -275,6 +299,9 @@ Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3ElementDeviceValues
       elemGradOffsets, elemGradOffsetsP, JNI_ABORT);
    env->ReleaseIntArrayElements (pairNodeIdxs, pairNodeIdxsP, JNI_ABORT);
    env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (nodeDims, nodeDimsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (
+      nodeTransforms, nodeTransformsP, JNI_ABORT);
    env->ReleaseDoubleArrayElements (grads, gradsP, JNI_ABORT);
    env->ReleaseDoubleArrayElements (Ds, DsP, JNI_ABORT);
    env->ReleaseDoubleArrayElements (sigmas, sigmasP, JNI_ABORT);
@@ -488,15 +515,19 @@ Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffness3ElementGeometryDevi
 JNIEXPORT jint JNICALL
 Java_maspack_solvers_CuDssSolver_doAddDilationalStiffness3ElementDeviceValues
   (JNIEnv* env, jclass /*cls*/, jlong handle,
-   jintArray elemNodeCounts, jintArray elemPressureCounts,
+   jintArray elemNodeCounts, jintArray elemNodeOffsets,
+   jintArray elemPressureCounts,
    jintArray elemPairOffsets, jintArray elemConstraintOffsets,
    jintArray elemRinvOffsets, jintArray pairNodeIdxs,
-   jintArray blockSlots, jdoubleArray constraints, jdoubleArray rinvs,
-   jint nelems, jdouble scale) {
+   jintArray blockSlots, jintArray nodeDims,
+   jdoubleArray nodeTransforms, jdoubleArray constraints,
+   jdoubleArray rinvs, jint nelems, jdouble scale) {
    CuDssBridge* b = asBridge (handle);
    if (!b) return CUDSS_BRIDGE_ERR_STATE;
    jint* elemNodeCountsP =
       env->GetIntArrayElements (elemNodeCounts, nullptr);
+   jint* elemNodeOffsetsP =
+      env->GetIntArrayElements (elemNodeOffsets, nullptr);
    jint* elemPressureCountsP =
       env->GetIntArrayElements (elemPressureCounts, nullptr);
    jint* elemPairOffsetsP =
@@ -507,15 +538,24 @@ Java_maspack_solvers_CuDssSolver_doAddDilationalStiffness3ElementDeviceValues
       env->GetIntArrayElements (elemRinvOffsets, nullptr);
    jint* pairNodeIdxsP = env->GetIntArrayElements (pairNodeIdxs, nullptr);
    jint* blockSlotsP = env->GetIntArrayElements (blockSlots, nullptr);
+   jint* nodeDimsP = env->GetIntArrayElements (nodeDims, nullptr);
+   jdouble* nodeTransformsP =
+      env->GetDoubleArrayElements (nodeTransforms, nullptr);
    jdouble* constraintsP =
       env->GetDoubleArrayElements (constraints, nullptr);
    jdouble* rinvsP = env->GetDoubleArrayElements (rinvs, nullptr);
-   if (!elemNodeCountsP || !elemPressureCountsP || !elemPairOffsetsP ||
+   if (!elemNodeCountsP || !elemNodeOffsetsP || !elemPressureCountsP ||
+       !elemPairOffsetsP ||
        !elemConstraintOffsetsP || !elemRinvOffsetsP || !pairNodeIdxsP ||
-       !blockSlotsP || !constraintsP || !rinvsP) {
+       !blockSlotsP || !nodeDimsP || !nodeTransformsP ||
+       !constraintsP || !rinvsP) {
       if (elemNodeCountsP) {
          env->ReleaseIntArrayElements (
             elemNodeCounts, elemNodeCountsP, JNI_ABORT);
+      }
+      if (elemNodeOffsetsP) {
+         env->ReleaseIntArrayElements (
+            elemNodeOffsets, elemNodeOffsetsP, JNI_ABORT);
       }
       if (elemPressureCountsP) {
          env->ReleaseIntArrayElements (
@@ -540,6 +580,13 @@ Java_maspack_solvers_CuDssSolver_doAddDilationalStiffness3ElementDeviceValues
       if (blockSlotsP) {
          env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
       }
+      if (nodeDimsP) {
+         env->ReleaseIntArrayElements (nodeDims, nodeDimsP, JNI_ABORT);
+      }
+      if (nodeTransformsP) {
+         env->ReleaseDoubleArrayElements (
+            nodeTransforms, nodeTransformsP, JNI_ABORT);
+      }
       if (constraintsP) {
          env->ReleaseDoubleArrayElements (
             constraints, constraintsP, JNI_ABORT);
@@ -550,13 +597,17 @@ Java_maspack_solvers_CuDssSolver_doAddDilationalStiffness3ElementDeviceValues
       return CUDSS_BRIDGE_ERR_CUDA_COPY;
    }
    int status = b->addDilationalStiffness3ElementDeviceValues (
-      (const int*)elemNodeCountsP, (const int*)elemPressureCountsP,
+      (const int*)elemNodeCountsP, (const int*)elemNodeOffsetsP,
+      (const int*)elemPressureCountsP,
       (const int*)elemPairOffsetsP, (const int*)elemConstraintOffsetsP,
       (const int*)elemRinvOffsetsP, (const int*)pairNodeIdxsP,
-      (const int*)blockSlotsP, (const double*)constraintsP,
+      (const int*)blockSlotsP, (const int*)nodeDimsP,
+      (const double*)nodeTransformsP, (const double*)constraintsP,
       (const double*)rinvsP, (int)nelems, (double)scale);
    env->ReleaseIntArrayElements (
       elemNodeCounts, elemNodeCountsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (
+      elemNodeOffsets, elemNodeOffsetsP, JNI_ABORT);
    env->ReleaseIntArrayElements (
       elemPressureCounts, elemPressureCountsP, JNI_ABORT);
    env->ReleaseIntArrayElements (
@@ -567,6 +618,9 @@ Java_maspack_solvers_CuDssSolver_doAddDilationalStiffness3ElementDeviceValues
       elemRinvOffsets, elemRinvOffsetsP, JNI_ABORT);
    env->ReleaseIntArrayElements (pairNodeIdxs, pairNodeIdxsP, JNI_ABORT);
    env->ReleaseIntArrayElements (blockSlots, blockSlotsP, JNI_ABORT);
+   env->ReleaseIntArrayElements (nodeDims, nodeDimsP, JNI_ABORT);
+   env->ReleaseDoubleArrayElements (
+      nodeTransforms, nodeTransformsP, JNI_ABORT);
    env->ReleaseDoubleArrayElements (constraints, constraintsP, JNI_ABORT);
    env->ReleaseDoubleArrayElements (rinvs, rinvsP, JNI_ABORT);
    return (jint)status;

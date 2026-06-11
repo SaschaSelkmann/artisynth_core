@@ -4239,17 +4239,6 @@ PointAttachable, ConnectableBody {
          }
          return false;
       }
-      if (hasActiveMasterAttachedNode()) {
-         // the nonlinear material3 kernel does not perform the master-slave
-         // reduction; only the linear-elastic geometry kernel does.
-         if (profileGpuAssembly) {
-            System.out.printf (
-               "[gpu-assembly-profile] fem=%s material3 disabled: "+
-               "active-master attachment (reduction is linear-elastic only)%n",
-               profileName());
-         }
-         return false;
-      }
       for (FemElement3d e : myElements) {
          FemMaterial mat = getElementMaterial(e);
          if (!materialSupportsGpuMaterialStiffness3 (mat) ||
@@ -4645,8 +4634,10 @@ PointAttachable, ConnectableBody {
       int nelems = myElements.size();
       int totalPairs = 0;
       int totalIps = 0;
+      int totalElemNodes = 0;
       int totalGradVecs = 0;
       int totalDilElems = 0;
+      int totalDilElemNodes = 0;
       int totalDilPairs = 0;
       int totalDilConstraintVecs = 0;
       int totalDilRinvVals = 0;
@@ -4670,43 +4661,60 @@ PointAttachable, ConnectableBody {
          }
          totalPairs += npairs;
          totalIps += e.getIntegrationPoints().length;
+         totalElemNodes += e.myNodes.length;
          totalGradVecs += e.getIntegrationPoints().length * e.myNodes.length;
          if (elemSoftIncomp == IncompMethod.ELEMENT) {
             int npvals = e.numPressureVals();
             totalDilElems++;
+            totalDilElemNodes += e.myNodes.length;
             totalDilPairs += npairs;
             totalDilConstraintVecs += e.myNodes.length*npvals;
             totalDilRinvVals += npvals*npvals;
          }
       }
       int[] elemNodeCounts = new int[nelems];
+      int[] elemNodeOffsets = new int[nelems+1];
       int[] elemPairOffsets = new int[nelems+1];
       int[] elemIpOffsets = new int[nelems+1];
       int[] elemGradOffsets = new int[nelems+1];
       int[] pairNodeIdxs = new int[2*totalPairs];
-      int[] blockSlots = new int[9*totalPairs];
+      // 36-slot stride per pair (row-major rowDim x colDim of the target,
+      // reduced block; max 6x6). Unwritten entries stay -1.
+      int[] blockSlots = new int[36*totalPairs];
+      java.util.Arrays.fill (blockSlots, -1);
+      int[] nodeDims = new int[totalElemNodes];
+      double[] nodeTransforms = new double[18*totalElemNodes];
       double[] grads = new double[3*totalGradVecs];
       double[] Ds = new double[36*totalIps];
       double[] sigmas = new double[6*totalIps];
       double[] dvs = new double[totalIps];
       int[] dilElemNodeCounts = new int[totalDilElems];
+      int[] dilElemNodeOffsets = new int[totalDilElems+1];
       int[] dilElemPressureCounts = new int[totalDilElems];
       int[] dilElemPairOffsets = new int[totalDilElems+1];
       int[] dilElemConstraintOffsets = new int[totalDilElems+1];
       int[] dilElemRinvOffsets = new int[totalDilElems+1];
       int[] dilPairNodeIdxs = new int[2*totalDilPairs];
-      int[] dilBlockSlots = new int[9*totalDilPairs];
+      int[] dilBlockSlots = new int[36*totalDilPairs];
+      java.util.Arrays.fill (dilBlockSlots, -1);
+      int[] dilNodeDims = new int[totalDilElemNodes];
+      double[] dilNodeTransforms = new double[18*totalDilElemNodes];
       double[] dilConstraints = new double[3*totalDilConstraintVecs];
       double[] dilRinvs = new double[totalDilRinvVals];
 
       int elemIdx = 0;
+      int elemNodeIdx = 0;
       int pairIdx = 0;
       int ipIdx = 0;
       int gradVecIdx = 0;
       int dilElemIdx = 0;
+      int dilElemNodeIdx = 0;
       int dilPairIdx = 0;
       int dilConstraintVecIdx = 0;
       int dilRinvIdx = 0;
+      // solve matrix: target (reduced) block numbers are looked up here by
+      // (solveRow, solveCol); the master-coupling blocks pre-exist in S.
+      SparseNumberedBlockMatrix S = context.getMatrix();
       for (FemElement3d e : myElements) {
          FemMaterial mat = getElementMaterial(e);
          IncompMethod elemSoftIncomp =
@@ -4719,79 +4727,90 @@ PointAttachable, ConnectableBody {
          double[] jbuf = myAvgDetFs.getBuffer();
 
          elemNodeCounts[elemIdx] = e.myNodes.length;
+         elemNodeOffsets[elemIdx] = elemNodeIdx;
          elemPairOffsets[elemIdx] = pairIdx;
          elemIpOffsets[elemIdx] = ipIdx;
          elemGradOffsets[elemIdx] = gradVecIdx;
          if (elemSoftIncomp == IncompMethod.ELEMENT) {
             dilElemNodeCounts[dilElemIdx] = e.myNodes.length;
+            dilElemNodeOffsets[dilElemIdx] = dilElemNodeIdx;
             dilElemPressureCounts[dilElemIdx] = e.numPressureVals();
             dilElemPairOffsets[dilElemIdx] = dilPairIdx;
             dilElemConstraintOffsets[dilElemIdx] = dilConstraintVecIdx;
             dilElemRinvOffsets[dilElemIdx] = dilRinvIdx;
          }
-         for (int i = 0; i < e.myNodes.length; i++) {
+
+         int nn = e.myNodes.length;
+         int elemNodeBase = elemNodeIdx;
+         int[] tdim = new int[nn];   // target block dim per local node (3/6)
+         int[] tgt = new int[nn];    // target solve index per local node
+         int[] tmpTarget = new int[1];
+         for (int i=0; i<nn; i++) {
+            // per-node master-slave reduction descriptor (free / slave). No
+            // warping fold here: the nonlinear tangent is evaluated in the
+            // current configuration, so T is just I (free) or H (slave).
+            tdim[i] = getGpuNodeReduction (
+               e.myNodes[i], nodeTransforms, 18*elemNodeIdx, tmpTarget);
+            tgt[i] = tmpTarget[0];
+            nodeDims[elemNodeIdx] = tdim[i];
+            elemNodeIdx++;
+         }
+         if (elemSoftIncomp == IncompMethod.ELEMENT) {
+            // the dilational kernel shares the element's reduction data
+            System.arraycopy (
+               nodeDims, elemNodeBase, dilNodeDims, dilElemNodeIdx, nn);
+            System.arraycopy (
+               nodeTransforms, 18*elemNodeBase, dilNodeTransforms,
+               18*dilElemNodeIdx, 18*nn);
+            dilElemNodeIdx += nn;
+         }
+
+         for (int i = 0; i < nn; i++) {
             int bi = e.myNodes[i].getLocalSolveIndex();
             if (bi != -1) {
-               for (int j = 0; j < e.myNodes.length; j++) {
+               for (int j = 0; j < nn; j++) {
                   int bj = e.myNodes[j].getLocalSolveIndex();
                   // emit every node pair: the device matrix is factored as
                   // GENERAL (full), so the lower block triangle must be filled
                   if (bj != -1) {
-                     FemNodeNeighbor nbr = e.myNbrs[i][j];
                      pairNodeIdxs[2*pairIdx] = i;
                      pairNodeIdxs[2*pairIdx+1] = j;
-                     int slotBase = 9*pairIdx;
-                     int blkNum = nbr.getBlockNumber();
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 0);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 1);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 0, 2);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 0);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 1);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 1, 2);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 0);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 1);
-                     blockSlots[slotBase++] =
-                        context.getSlotMap().getBlockValueSlot (blkNum, 2, 2);
+                     // reduction at scatter time: the 3x3 K_ij is redirected to
+                     // the (target_i, target_j) block as T_i K T_j^T. For a free
+                     // pair target_i/j are the nodes' own solve blocks (dim 3,
+                     // T=I), so this reproduces the plain 9-slot scatter; for a
+                     // slave the target is the master frame's block (dim 6, T=H).
+                     int rowDim = tdim[i];
+                     int colDim = tdim[j];
+                     MatrixBlock tb = S.getBlock (tgt[i], tgt[j]);
+                     if (tb == null) {
+                        // master-coupling block absent: cannot assemble the
+                        // reduction on the existing pattern -> CPU fallback.
+                        if (MechSystemSolver.getGpuAssemblyProfilingEnabled()) {
+                           System.out.printf (
+                              "[gpu-assembly-profile] fem=%s material3 "+
+                              "disabled: missing target block (%d,%d)%n",
+                              profileName(), tgt[i], tgt[j]);
+                        }
+                        return false;
+                     }
+                     int blkNum = tb.getBlockNumber();
+                     int slotBase = 36*pairIdx;
+                     for (int r=0; r<rowDim; r++) {
+                        for (int c=0; c<colDim; c++) {
+                           blockSlots[slotBase + r*colDim + c] =
+                              context.getSlotMap().getBlockValueSlot (
+                                 blkNum, r, c);
+                        }
+                     }
                      pairIdx++;
                      if (elemSoftIncomp == IncompMethod.ELEMENT) {
                         dilPairNodeIdxs[2*dilPairIdx] = i;
                         dilPairNodeIdxs[2*dilPairIdx+1] = j;
-                        int dilSlotBase = 9*dilPairIdx;
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 0, 0);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 0, 1);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 0, 2);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 1, 0);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 1, 1);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 1, 2);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 2, 0);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 2, 1);
-                        dilBlockSlots[dilSlotBase++] =
-                           context.getSlotMap().getBlockValueSlot (
-                              blkNum, 2, 2);
+                        // the dilational pair targets the same reduced block
+                        System.arraycopy (
+                           blockSlots, slotBase, dilBlockSlots,
+                           36*dilPairIdx, 36);
                         dilPairIdx++;
                      }
                   }
@@ -4891,6 +4910,7 @@ PointAttachable, ConnectableBody {
                   dilRinvs[dilRinvIdx++] = s*myRinv.get (a, b);
                }
             }
+            dilElemNodeOffsets[dilElemIdx+1] = dilElemNodeIdx;
             dilElemPairOffsets[dilElemIdx+1] = dilPairIdx;
             dilElemConstraintOffsets[dilElemIdx+1] = dilConstraintVecIdx;
             dilElemRinvOffsets[dilElemIdx+1] = dilRinvIdx;
@@ -4898,16 +4918,20 @@ PointAttachable, ConnectableBody {
          }
          elemIdx++;
       }
+      elemNodeOffsets[nelems] = elemNodeIdx;
       elemPairOffsets[nelems] = pairIdx;
       elemIpOffsets[nelems] = ipIdx;
       elemGradOffsets[nelems] = gradVecIdx;
       context.addMaterialStiffness3ElementCrsValueContributions (
-         elemNodeCounts, elemPairOffsets, elemIpOffsets, elemGradOffsets,
-         pairNodeIdxs, blockSlots, grads, Ds, sigmas, dvs, nelems);
+         elemNodeCounts, elemNodeOffsets, elemPairOffsets, elemIpOffsets,
+         elemGradOffsets, pairNodeIdxs, blockSlots, nodeDims, nodeTransforms,
+         grads, Ds, sigmas, dvs, nelems);
       context.addDilationalStiffness3ElementCrsValueContributions (
-         dilElemNodeCounts, dilElemPressureCounts, dilElemPairOffsets,
+         dilElemNodeCounts, dilElemNodeOffsets, dilElemPressureCounts,
+         dilElemPairOffsets,
          dilElemConstraintOffsets, dilElemRinvOffsets, dilPairNodeIdxs,
-         dilBlockSlots, dilConstraints, dilRinvs, dilElemIdx);
+         dilBlockSlots, dilNodeDims, dilNodeTransforms,
+         dilConstraints, dilRinvs, dilElemIdx);
       return true;
    }
 

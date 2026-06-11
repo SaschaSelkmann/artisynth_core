@@ -322,24 +322,22 @@ __device__ static void addMaterialStiffness3Block (
    }
 }
 
-// Master-slave reduction at element-scatter time. For node pair (i,j) the
-// 3x3 stiffness K_ij is transformed to T_i K_ij T_j^T and scattered to the
-// (target_i, target_j) block, where T = I (3x3) for a free node and T = H
-// (6x3, the PointFrameAttachment master block) for a slave node. This is
-// exactly P^T K P assembled directly: pure atomicAdd, no zeroing, no ordering
-// dependence, correct for any number of slaves coupled to the same master.
+// Master-slave reduction at element-scatter time. For node pair (i,j) a
+// fully-formed 3x3 stiffness K_ij is transformed to T_i K_ij T_j^T and
+// scattered to the (target_i, target_j) block, where T = I (3x3) for a free
+// node and T = H (6x3, the PointFrameAttachment master block) for a slave
+// node. This is exactly P^T K P assembled directly: pure atomicAdd, no
+// zeroing, no ordering dependence, correct for any number of slaves coupled
+// to the same master.
 //   TL  = T_i, stored row-major as (rowDim x 3) within an 18-double slot.
 //   TJ  = T_j, stored the same way; the right factor is T_j^T, so we read TJ
 //         transposed (TR[k][c] = TJ[c][k]).
 //   slots = target block CRS slots, row-major (rowDim x colDim), up to 36.
-__device__ static void addReducedMaterialStiffness3Block (
+__device__ static void scatterReduced3Block (
    const int* slots, int rowDim, int colDim,
-   const double* TL, const double* TJ,
-   const double* gi, const double* D, const double* sig,
-   const double* gjRaw, double dv, double globalScale, double* crsVals) {
+   const double* TL, const double* TJ, const double K[9],
+   double globalScale, double* crsVals) {
 
-   double K[9];
-   computeMaterialStiffness3K (gi, D, sig, gjRaw, dv, K);
    // tmp = TL * K  -> (rowDim x 3)
    double tmp[18];
    for (int r = 0; r < rowDim; r++) {
@@ -366,14 +364,31 @@ __device__ static void addReducedMaterialStiffness3Block (
    }
 }
 
+// Computes a material-stiffness 3x3 block and scatters it with the
+// master-slave reduction T_i K T_j^T (see scatterReduced3Block).
+__device__ static void addReducedMaterialStiffness3Block (
+   const int* slots, int rowDim, int colDim,
+   const double* TL, const double* TJ,
+   const double* gi, const double* D, const double* sig,
+   const double* gjRaw, double dv, double globalScale, double* crsVals) {
+
+   double K[9];
+   computeMaterialStiffness3K (gi, D, sig, gjRaw, dv, K);
+   scatterReduced3Block (
+      slots, rowDim, colDim, TL, TJ, K, globalScale, crsVals);
+}
+
 __global__ static void addMaterialStiffness3ElementKernel (
    int nelems,
    const int*    __restrict__ elemNodeCounts,
+   const int*    __restrict__ elemNodeOffsets,
    const int*    __restrict__ elemPairOffsets,
    const int*    __restrict__ elemIpOffsets,
    const int*    __restrict__ elemGradOffsets,
    const int*    __restrict__ pairNodeIdxs,
    const int*    __restrict__ blockSlots,
+   const int*    __restrict__ nodeDims,
+   const double* __restrict__ nodeTransforms,
    const double* __restrict__ grads,
    const double* __restrict__ Ds,
    const double* __restrict__ sigmas,
@@ -386,6 +401,7 @@ __global__ static void addMaterialStiffness3ElementKernel (
       return;
    }
    int nnodes = elemNodeCounts[e];
+   int node0 = elemNodeOffsets[e];
    int pair0 = elemPairOffsets[e];
    int npairs = elemPairOffsets[e + 1] - pair0;
    int ip0 = elemIpOffsets[e];
@@ -403,23 +419,33 @@ __global__ static void addMaterialStiffness3ElementKernel (
       int gbase = grad0 + ip * nnodes;
       const double* gi = grads + 3*(gbase + i);
       const double* gj = grads + 3*(gbase + j);
-      addMaterialStiffness3Block (
-         blockSlots + 9*pidx, gi, Ds + 36*ipidx, sigmas + 6*ipidx,
+      // Master-slave reduction at scatter time (same scheme as the linear
+      // geometry kernel): redirect the (i,j) 3x3 block onto the target
+      // (reduced) block via T_i K T_j^T. Free-free reduces to the plain
+      // scatter with identity transforms.
+      int rowDim = nodeDims[node0 + i];
+      int colDim = nodeDims[node0 + j];
+      addReducedMaterialStiffness3Block (
+         blockSlots + 36*pidx, rowDim, colDim,
+         nodeTransforms + 18*(node0 + i), nodeTransforms + 18*(node0 + j),
+         gi, Ds + 36*ipidx, sigmas + 6*ipidx,
          gj, dvs[ipidx], globalScale, crsVals);
    }
 }
 
 extern "C" void addMaterialStiffness3Element_launch (
-   int nelems, const int* elemNodeCounts, const int* elemPairOffsets,
-   const int* elemIpOffsets, const int* elemGradOffsets,
-   const int* pairNodeIdxs, const int* blockSlots, const double* grads,
-   const double* Ds, const double* sigmas, const double* dvs,
-   double globalScale, double* crsVals, cudaStream_t stream) {
+   int nelems, const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPairOffsets, const int* elemIpOffsets,
+   const int* elemGradOffsets, const int* pairNodeIdxs,
+   const int* blockSlots, const int* nodeDims, const double* nodeTransforms,
+   const double* grads, const double* Ds, const double* sigmas,
+   const double* dvs, double globalScale, double* crsVals,
+   cudaStream_t stream) {
    const int threads = 256;
    addMaterialStiffness3ElementKernel<<<nelems, threads, 0, stream>>>(
-      nelems, elemNodeCounts, elemPairOffsets, elemIpOffsets,
-      elemGradOffsets, pairNodeIdxs, blockSlots, grads, Ds, sigmas, dvs,
-      globalScale, crsVals);
+      nelems, elemNodeCounts, elemNodeOffsets, elemPairOffsets,
+      elemIpOffsets, elemGradOffsets, pairNodeIdxs, blockSlots, nodeDims,
+      nodeTransforms, grads, Ds, sigmas, dvs, globalScale, crsVals);
 }
 
 __device__ static void fillLinearElasticD (
@@ -632,12 +658,15 @@ extern "C" void addLinearElasticStiffness3ElementGeometry_launch (
 __global__ static void addDilationalStiffness3ElementKernel (
    int nelems,
    const int*    __restrict__ elemNodeCounts,
+   const int*    __restrict__ elemNodeOffsets,
    const int*    __restrict__ elemPressureCounts,
    const int*    __restrict__ elemPairOffsets,
    const int*    __restrict__ elemConstraintOffsets,
    const int*    __restrict__ elemRinvOffsets,
    const int*    __restrict__ pairNodeIdxs,
    const int*    __restrict__ blockSlots,
+   const int*    __restrict__ nodeDims,
+   const double* __restrict__ nodeTransforms,
    const double* __restrict__ constraints,
    const double* __restrict__ rinvs,
    double globalScale,
@@ -651,6 +680,7 @@ __global__ static void addDilationalStiffness3ElementKernel (
    if (np <= 0) {
       return;
    }
+   int node0 = elemNodeOffsets[e];
    int pair0 = elemPairOffsets[e];
    int npairs = elemPairOffsets[e + 1] - pair0;
    int c0 = elemConstraintOffsets[e];
@@ -683,25 +713,27 @@ __global__ static void addDilationalStiffness3ElementKernel (
             K[8] += ci[2]*r*cj[2];
          }
       }
-      const int* slots = blockSlots + 9*pidx;
-      for (int k=0; k<9; k++) {
-         int slot = slots[k];
-         if (slot >= 0) {
-            atomicAdd (&crsVals[slot], globalScale*K[k]);
-         }
-      }
+      // Master-slave reduction at scatter time: T_i K T_j^T onto the target
+      // (reduced) block; free-free is the plain scatter with T = I.
+      scatterReduced3Block (
+         blockSlots + 36*pidx, nodeDims[node0 + i], nodeDims[node0 + j],
+         nodeTransforms + 18*(node0 + i), nodeTransforms + 18*(node0 + j),
+         K, globalScale, crsVals);
    }
 }
 
 extern "C" void addDilationalStiffness3Element_launch (
-   int nelems, const int* elemNodeCounts, const int* elemPressureCounts,
-   const int* elemPairOffsets, const int* elemConstraintOffsets,
-   const int* elemRinvOffsets, const int* pairNodeIdxs,
-   const int* blockSlots, const double* constraints, const double* rinvs,
-   double globalScale, double* crsVals, cudaStream_t stream) {
+   int nelems, const int* elemNodeCounts, const int* elemNodeOffsets,
+   const int* elemPressureCounts, const int* elemPairOffsets,
+   const int* elemConstraintOffsets, const int* elemRinvOffsets,
+   const int* pairNodeIdxs, const int* blockSlots, const int* nodeDims,
+   const double* nodeTransforms, const double* constraints,
+   const double* rinvs, double globalScale, double* crsVals,
+   cudaStream_t stream) {
    const int threads = 256;
    addDilationalStiffness3ElementKernel<<<nelems, threads, 0, stream>>>(
-      nelems, elemNodeCounts, elemPressureCounts, elemPairOffsets,
-      elemConstraintOffsets, elemRinvOffsets, pairNodeIdxs, blockSlots,
-      constraints, rinvs, globalScale, crsVals);
+      nelems, elemNodeCounts, elemNodeOffsets, elemPressureCounts,
+      elemPairOffsets, elemConstraintOffsets, elemRinvOffsets, pairNodeIdxs,
+      blockSlots, nodeDims, nodeTransforms, constraints, rinvs, globalScale,
+      crsVals);
 }

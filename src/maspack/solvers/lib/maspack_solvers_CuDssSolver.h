@@ -108,10 +108,10 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3D
 /*
  * Class:     maspack_solvers_CuDssSolver
  * Method:    doAddMaterialStiffness3ElementDeviceValues
- * Signature: (J[I[I[I[I[I[I[D[D[D[DID)I
+ * Signature: (J[I[I[I[I[I[I[I[I[D[D[D[D[DID)I
  */
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddMaterialStiffness3ElementDeviceValues
-  (JNIEnv *, jclass, jlong, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jdoubleArray, jdoubleArray, jdoubleArray, jdoubleArray, jint, jdouble);
+  (JNIEnv *, jclass, jlong, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jdoubleArray, jdoubleArray, jdoubleArray, jdoubleArray, jdoubleArray, jint, jdouble);
 
 /*
  * Class:     maspack_solvers_CuDssSolver
@@ -132,10 +132,10 @@ JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddLinearElasticStiffn
 /*
  * Class:     maspack_solvers_CuDssSolver
  * Method:    doAddDilationalStiffness3ElementDeviceValues
- * Signature: (J[I[I[I[I[I[I[I[D[DID)I
+ * Signature: (J[I[I[I[I[I[I[I[I[I[D[D[DID)I
  */
 JNIEXPORT jint JNICALL Java_maspack_solvers_CuDssSolver_doAddDilationalStiffness3ElementDeviceValues
-  (JNIEnv *, jclass, jlong, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jdoubleArray, jdoubleArray, jint, jdouble);
+  (JNIEnv *, jclass, jlong, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jintArray, jdoubleArray, jdoubleArray, jdoubleArray, jint, jdouble);
 
 /*
  * Class:     maspack_solvers_CuDssSolver
