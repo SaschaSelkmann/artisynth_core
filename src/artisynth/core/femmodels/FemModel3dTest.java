@@ -942,6 +942,103 @@ public class FemModel3dTest extends UnitTest {
          max+" (ref="+ref+")");
    }
 
+   // Materials for the nonlinear material3/dilational GPU kernel equivalence
+   // test. Fresh instances per run (materials are model-owned properties).
+   private FemMaterial createNonlinearTestMaterial (String name) {
+      switch (name) {
+         case "neohookean":
+            // compressible: exercises the material3 element kernel only
+            return new NeoHookeanMaterial (50000.0, 0.33);
+         case "mooneyRivlin":
+            // incompressible: exercises material3 + the dilational kernel
+            return new MooneyRivlinMaterial (10000.0, 0, 0, 0, 0, 100000.0);
+         case "stVenantKirchoff":
+            return new StVenantKirchoffMaterial (50000.0, 0.33);
+         default:
+            throw new IllegalArgumentException ("unknown material "+name);
+      }
+   }
+
+   // Cross-validates the NONLINEAR material3 (and, for incompressible
+   // materials, dilational) GPU element kernels: a pure nonlinear FEM beam
+   // (x-min fixed, no attachments/bodies) stepped multi-step from a SEEDED
+   // nonzero bending velocity under gravity with ConstrainedBackwardEuler,
+   // cuDSS (device-assembled M contributions) vs Pardiso (host). The cuDSS
+   // run asserts that the device path actually engaged
+   // (kktDeviceMContributions), so a silent host fallback cannot make the
+   // comparison vacuous.
+   private double[] runNonlinearBeamStep (
+      maspack.solvers.SparseSolverId solverId, String matName) {
+
+      FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
+      fem.setMaterial (createNonlinearTestMaterial (matName));
+      fem.setDensity (1000);
+      fem.setStiffnessDamping (0.1);
+      fem.setParticleDamping (0.5);
+      for (FemNode3d node : fem.getNodes()) {
+         if (node.getRestPosition().x <= -0.5 + 1e-6) {
+            node.setDynamic (false);
+         }
+         else {
+            // seed a bending velocity field so the velocity-coupled terms
+            // (stiffness damping, J*v RHS) are exercised from step one
+            double x = node.getRestPosition().x + 0.5;
+            node.setVelocity (new Vector3d (0, 0, -0.5*x));
+         }
+      }
+      MechModel mech = new MechModel ("mech");
+      mech.setGravity (0, 0, -9.8);
+      mech.setIntegrator (
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setMatrixSolver (solverId);
+      mech.addModel (fem);
+
+      double h = 0.005;
+      for (int i=0; i<10; i++) {
+         mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
+         mech.advance (i*h, (i+1)*h, /*flags=*/0);
+      }
+      if (solverId == maspack.solvers.SparseSolverId.CuDss) {
+         String status =
+            mech.getSolver().getLastKktFactorDirectCrsStatus();
+         if (!"kktDeviceMContributions".equals (status)) {
+            throw new TestException (
+               "nonlinear beam ("+matName+") did not engage the device "+
+               "assembly path: status="+status);
+         }
+      }
+      VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
+      mech.getActiveVelState (vel);
+      return vel.getBuffer().clone();
+   }
+
+   private void testNonlinearMaterialEquivalence (String matName) {
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      double[] gpu =
+         runNonlinearBeamStep (maspack.solvers.SparseSolverId.CuDss, matName);
+      double[] cpu =
+         runNonlinearBeamStep (
+            maspack.solvers.SparseSolverId.Pardiso, matName);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (ref < 1e-3) {
+         throw new TestException (
+            "nonlinear beam ("+matName+") barely moved (ref="+ref+
+            "); kernels not meaningfully exercised");
+      }
+      if (max > tol) {
+         throw new TestException (
+            "nonlinear ("+matName+") cuDSS vs Pardiso velocity mismatch: "+
+            "max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "nonlinear ("+matName+") cuDSS equivalence ok: max="+max+
+         " (ref="+ref+")");
+   }
+
    // Validates the device FEM internal-force SpMV (task 16 building block): the
    // internal elastic force is K*u (K = the device-assembled position Jacobian,
    // u = displacement from rest). Builds a pure non-corotated FEM beam (x-min
@@ -2067,6 +2164,9 @@ public class FemModel3dTest extends UnitTest {
       testCorotatedLinearEquivalence();
       testDeviceFemElasticForce();
       testConstrainedLinearElasticEquivalence();
+      testNonlinearMaterialEquivalence ("neohookean");
+      testNonlinearMaterialEquivalence ("mooneyRivlin");
+      testNonlinearMaterialEquivalence ("stVenantKirchoff");
       testWrapAttachEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();

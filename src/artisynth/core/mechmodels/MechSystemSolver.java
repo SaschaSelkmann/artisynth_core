@@ -1306,6 +1306,30 @@ public class MechSystemSolver {
       }
    }
 
+   // directCrsStatus of the most recent KKT factor; recorded unconditionally
+   // (independent of the status/profile flags) so tests can assert engagement
+   private String myLastKktFactorDirectCrsStatus;
+
+   private String recordKktFactorStatus (
+      MechSystem.GpuAssemblyContext context) {
+      String status = myKKTSolver.lastFactorUsedDeviceValues() ?
+         (context != null ? "kktDeviceMContributions" : "kktDeviceValues") :
+         "kktHostValues";
+      myLastKktFactorDirectCrsStatus = status;
+      return status;
+   }
+
+   /**
+    * Returns the directCrsStatus of the most recent KKT factor
+    * ("kktDeviceMContributions", "kktDeviceValues" or "kktHostValues"), or
+    * null if no KKT factor has run yet. Lets tests assert that the GPU device
+    * assembly path actually engaged: a silent host fallback would otherwise
+    * make a cuDSS-vs-Pardiso equivalence test vacuous.
+    */
+   public String getLastKktFactorDirectCrsStatus() {
+      return myLastKktFactorDirectCrsStatus;
+   }
+
    private void requireFullGpuAssembly (
       String phase, MechSystem.GpuAssemblyContext context) {
 
@@ -3265,10 +3289,7 @@ public class MechSystemSolver {
                maybeReportGpuAssemblyStatus (
                   "kktFactor", false,
                   myKKTSolver.lastFactorUsedDeviceValues(),
-                  myKKTSolver.lastFactorUsedDeviceValues() ?
-                     (kktMDeviceContext != null ?
-                        "kktDeviceMContributions" : "kktDeviceValues") :
-                     "kktHostValues",
+                  recordKktFactorStatus (kktMDeviceContext),
                   velSize + myGsize,
                   myKKTSolver.lastFactorUsedDeviceValues() ?
                      kktMDeviceContext : null);
@@ -3352,10 +3373,7 @@ public class MechSystemSolver {
                maybeReportGpuAssemblyStatus (
                   "kktFactor", false,
                   myKKTSolver.lastFactorUsedDeviceValues(),
-                  myKKTSolver.lastFactorUsedDeviceValues() ?
-                     (kktMDeviceContext != null ?
-                        "kktDeviceMContributions" : "kktDeviceValues") :
-                     "kktHostValues",
+                  recordKktFactorStatus (kktMDeviceContext),
                   velSize + myGsize,
                   myKKTSolver.lastFactorUsedDeviceValues() ?
                      kktMDeviceContext : null);
