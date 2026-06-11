@@ -970,6 +970,23 @@ public class FemModel3dTest extends UnitTest {
    private double[] runNonlinearBeamStep (
       maspack.solvers.SparseSolverId solverId, String matName) {
 
+      return runNonlinearBeamStep (
+         solverId, matName,
+         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+   }
+
+   private double[] runNonlinearBeamStep (
+      maspack.solvers.SparseSolverId solverId, String matName,
+      MechSystemSolver.Integrator integrator) {
+
+      return runNonlinearBeamStep (
+         solverId, matName, integrator, /*h=*/0.005, /*nsteps=*/10);
+   }
+
+   private double[] runNonlinearBeamStep (
+      maspack.solvers.SparseSolverId solverId, String matName,
+      MechSystemSolver.Integrator integrator, double h, int nsteps) {
+
       FemModel3d fem = FemFactory.createTetGrid (null, 1.0, 0.4, 0.4, 4, 2, 2);
       fem.setMaterial (createNonlinearTestMaterial (matName));
       fem.setDensity (1000);
@@ -988,13 +1005,11 @@ public class FemModel3dTest extends UnitTest {
       }
       MechModel mech = new MechModel ("mech");
       mech.setGravity (0, 0, -9.8);
-      mech.setIntegrator (
-         MechSystemSolver.Integrator.ConstrainedBackwardEuler);
+      mech.setIntegrator (integrator);
       mech.setMatrixSolver (solverId);
       mech.addModel (fem);
 
-      double h = 0.005;
-      for (int i=0; i<10; i++) {
+      for (int i=0; i<nsteps; i++) {
          mech.preadvance (i*h, (i+1)*h, /*flags=*/0);
          mech.advance (i*h, (i+1)*h, /*flags=*/0);
       }
@@ -1003,8 +1018,8 @@ public class FemModel3dTest extends UnitTest {
             mech.getSolver().getLastKktFactorDirectCrsStatus();
          if (!"kktDeviceMContributions".equals (status)) {
             throw new TestException (
-               "nonlinear beam ("+matName+") did not engage the device "+
-               "assembly path: status="+status);
+               "nonlinear beam ("+matName+", "+integrator+
+               ") did not engage the device assembly path: status="+status);
          }
       }
       VectorNd vel = new VectorNd (mech.getActiveVelStateSize());
@@ -1036,6 +1051,48 @@ public class FemModel3dTest extends UnitTest {
       }
       System.out.println (
          "nonlinear ("+matName+") cuDSS equivalence ok: max="+max+
+         " (ref="+ref+")");
+   }
+
+   // Cross-validates the device M-block assembly across the KKT integrator
+   // family beyond ConstrainedBackwardEuler. All of these funnel through
+   // KKTFactorAndSolve with integrator-specific a0..a3 coefficients:
+   //   Trapezoidal             a0=-h/2, a1=-h^2/4 (vel+pos Jacobian on device)
+   //   FullBackwardEuler       outer CBE factor + inner Newton iterations
+   //                           with a0=-h, a1=-h^2
+   //   ConstrainedForwardEuler a0..a3=0 (device M context holds mass only)
+   // Same seeded nonlinear beam as testNonlinearMaterialEquivalence, cuDSS vs
+   // Pardiso via the solve; the cuDSS run asserts kktDeviceMContributions.
+   private void testIntegratorEquivalence (
+      MechSystemSolver.Integrator integrator, double h, int nsteps) {
+
+      if (!maspack.solvers.CuDssSolver.isAvailable()) {
+         return;
+      }
+      String matName = "neohookean";
+      double[] gpu =
+         runNonlinearBeamStep (
+            maspack.solvers.SparseSolverId.CuDss, matName, integrator,
+            h, nsteps);
+      double[] cpu =
+         runNonlinearBeamStep (
+            maspack.solvers.SparseSolverId.Pardiso, matName, integrator,
+            h, nsteps);
+      double max = maxVelDiff (gpu, cpu);
+      double ref = maxAbs (cpu);
+      double tol = Math.max (1e-9, 1e-7*ref);
+      if (ref < 1e-3) {
+         throw new TestException (
+            "integrator ("+integrator+") beam barely moved (ref="+ref+
+            "); device path not meaningfully exercised");
+      }
+      if (max > tol) {
+         throw new TestException (
+            "integrator ("+integrator+") cuDSS vs Pardiso velocity "+
+            "mismatch: max="+max+" (tol="+tol+", ref="+ref+")");
+      }
+      System.out.println (
+         "integrator ("+integrator+") cuDSS equivalence ok: max="+max+
          " (ref="+ref+")");
    }
 
@@ -2264,6 +2321,13 @@ public class FemModel3dTest extends UnitTest {
       testNonlinearMaterialEquivalence ("stVenantKirchoff");
       testNonlinearAttachedBodyEquivalence ("neohookean");
       testNonlinearAttachedBodyEquivalence ("mooneyRivlin");
+      testIntegratorEquivalence (
+         MechSystemSolver.Integrator.Trapezoidal, 0.005, 10);
+      testIntegratorEquivalence (
+         MechSystemSolver.Integrator.FullBackwardEuler, 0.005, 10);
+      // explicit integrator: needs a much smaller step for stability
+      testIntegratorEquivalence (
+         MechSystemSolver.Integrator.ConstrainedForwardEuler, 2e-4, 50);
       testWrapAttachEquivalence();
       testConstrainedBackwardEulerEquivalence();
       testFindNearestElement();
